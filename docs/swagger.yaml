@@ -1,0 +1,108 @@
+basePath: /
+definitions:
+  apierror.APIError:
+    properties:
+      detail:
+        example: The image field is required
+        type: string
+      instance:
+        example: /api/v1/events
+        type: string
+      status:
+        example: 400
+        type: integer
+      title:
+        example: Bad Request
+        type: string
+      type:
+        example: about:blank
+        type: string
+    type: object
+  domain.EventData:
+    properties:
+      is_intruder:
+        type: boolean
+    type: object
+  domain.EventRequest:
+    properties:
+      image:
+        type: string
+      type:
+        allOf:
+        - $ref: '#/definitions/domain.EventType'
+        enum:
+        - bell
+        - motion
+    required:
+    - image
+    - type
+    type: object
+  domain.EventResponse:
+    properties:
+      data:
+        $ref: '#/definitions/domain.EventData'
+    type: object
+  domain.EventType:
+    enum:
+    - bell
+    - motion
+    type: string
+    x-enum-varnames:
+    - EventTypeBell
+    - EventTypeMotion
+host: localhost:8080
+info:
+  contact: {}
+  description: IoT gateway for the Secure Home project — routes microcontroller events
+    to the detection service.
+  title: Secure Home Gateway API
+  version: "1.0"
+paths:
+  /api/v1/events:
+    post:
+      consumes:
+      - application/json
+      description: Receives a security event from an IoT microcontroller and propagates
+        it to the detection service
+      parameters:
+      - description: Bearer JWT token
+        in: header
+        name: Authorization
+        required: true
+        type: string
+      - description: Event payload
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/domain.EventRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/domain.EventResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/apierror.APIError'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/apierror.APIError'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/apierror.APIError'
+      security:
+      - BearerAuth: []
+      summary: Report a security event
+      tags:
+      - events
+securityDefinitions:
+  BearerAuth:
+    in: header
+    name: Authorization
+    type: apiKey
+swagger: "2.0"

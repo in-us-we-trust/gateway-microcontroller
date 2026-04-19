@@ -1,0 +1,14 @@
+services:
+  gateway:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: "8080"
+      DETECTOR_SERVICE_URL: "http://detector:8080"
+
+  detector:
+    image: wiremock/wiremock:latest
+    ports:
+      - "8081:8080"
+    command: ["--verbose"]
