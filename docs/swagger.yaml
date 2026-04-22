@@ -2,6 +2,9 @@ basePath: /
 definitions:
   apierror.APIError:
     properties:
+      code:
+        example: DTE-001
+        type: string
       detail:
         example: The image field is required
         type: string
@@ -93,6 +96,10 @@ paths:
             $ref: '#/definitions/apierror.APIError'
         "500":
           description: Internal Server Error
+          schema:
+            $ref: '#/definitions/apierror.APIError'
+        "502":
+          description: Bad Gateway
           schema:
             $ref: '#/definitions/apierror.APIError'
       security:

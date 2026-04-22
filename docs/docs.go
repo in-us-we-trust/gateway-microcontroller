@@ -75,6 +75,12 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/apierror.APIError"
                         }
+                    },
+                    "502": {
+                        "description": "Bad Gateway",
+                        "schema": {
+                            "$ref": "#/definitions/apierror.APIError"
+                        }
                     }
                 }
             }
@@ -84,6 +90,10 @@ const docTemplate = `{
         "apierror.APIError": {
             "type": "object",
             "properties": {
+                "code": {
+                    "type": "string",
+                    "example": "DTE-001"
+                },
                 "detail": {
                     "type": "string",
                     "example": "The image field is required"

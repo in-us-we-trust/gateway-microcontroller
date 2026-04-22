@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"gateway-microcontroller/internal/domain"
+	"gateway-microcontroller/internal/requestctx"
 )
 
 type HTTPDetectorClient struct {
@@ -30,11 +31,14 @@ func (c *HTTPDetectorClient) Analyze(ctx context.Context, req *domain.EventReque
 		return nil, err
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/analyze", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/events", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	if deviceID, ok := requestctx.DeviceID(ctx); ok {
+		httpReq.Header.Set(requestctx.DeviceIDHeader, deviceID)
+	}
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
