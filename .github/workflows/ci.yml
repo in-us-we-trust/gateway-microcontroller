@@ -1,0 +1,63 @@
+name: CI (Go / Gin)
+
+on:
+  pull_request:
+    branches: ['main']
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+env:
+  GO_VERSION: '1.22'
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      pull-requests: read
+      statuses: write
+      checks: write
+
+    steps:
+      # 1) Checkout repository
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 2) Setup Go
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      # 3) Download dependencies
+      - name: Download dependencies
+        run: go mod download
+
+      # 4) Verify formatting
+      - name: Verify formatting
+        run: |
+          if [ -n "$(gofmt -l .)" ]; then
+            echo "The following files are not properly formatted:"
+            gofmt -l .
+            exit 1
+          fi
+
+      # 5) Run go vet
+      - name: Run go vet
+        run: go vet ./...
+
+      # 6) Run tests
+      - name: Run tests
+        env:
+          PORT: 8080
+          DETECTOR_SERVICE_URL: http://localhost:8087/api/detective-manager
+        run: go run scripts.go test
+
+      # 7) Build application
+      - name: Build application
+        run: go run scripts.go build
+
+      # 8) Validate Docker build
+      - name: Build Docker image
+        run: docker build -t gateway-microcontroller:test .
