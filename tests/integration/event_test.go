@@ -62,7 +62,7 @@ func TestPostEvent_Success_MotionEvent(t *testing.T) {
 			return ok && deviceID == "device-123"
 		}),
 		mock.MatchedBy(func(req *domain.EventRequest) bool {
-		return req.Type == domain.EventTypeMotion && req.Image == "base64data"
+			return req.Type == domain.EventTypeMotion && req.Image == "base64data"
 		}),
 	).Return(&domain.EventData{IsIntruder: true}, nil)
 
