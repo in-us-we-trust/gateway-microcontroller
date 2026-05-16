@@ -11,7 +11,7 @@ env:
 
   SERVICE: gateway-microcontroller
 
-  IMAGE: ${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/tp-repo/gateway-microcontroller
+  IMAGE: ${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/tp-hogar-seguro/gateway-microcontroller
 
 jobs:
   deploy:
