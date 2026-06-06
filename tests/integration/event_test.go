@@ -13,34 +13,12 @@ import (
 	"gateway-microcontroller/internal/handler"
 	"gateway-microcontroller/internal/requestctx"
 	"gateway-microcontroller/internal/service"
+	"gateway-microcontroller/tests/testutil"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
-
-type mockDetectorClient struct {
-	mock.Mock
-}
-
-func (m *mockDetectorClient) Analyze(ctx context.Context, req *domain.EventRequest) (*domain.EventData, error) {
-	args := m.Called(ctx, req)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*domain.EventData), args.Error(1)
-}
-
-var _ client.DetectorClient = (*mockDetectorClient)(nil)
-
-func mtlsTestMiddleware(deviceID string) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		device := requestctx.DeviceContext{DeviceID: deviceID}
-		ctx := requestctx.WithDeviceContext(c.Request.Context(), device)
-		c.Request = c.Request.WithContext(ctx)
-		c.Next()
-	}
-}
 
 func setupRouter(c client.DetectorClient) *gin.Engine {
 	gin.SetMode(gin.TestMode)
@@ -49,13 +27,13 @@ func setupRouter(c client.DetectorClient) *gin.Engine {
 
 	r := gin.New()
 	api := r.Group("/api/v1")
-	api.Use(mtlsTestMiddleware("device-123"))
+	api.Use(testutil.FakeMTLS("device-123", "serial-123"))
 	api.POST("/events", h.PostEvent)
 	return r
 }
 
 func TestPostEvent_Success_MotionEvent(t *testing.T) {
-	mockClient := new(mockDetectorClient)
+	mockClient := new(testutil.MockDetectorClient)
 	mockClient.On("Analyze",
 		mock.MatchedBy(func(ctx context.Context) bool {
 			device, ok := requestctx.GetDeviceContext(ctx)
@@ -85,7 +63,7 @@ func TestPostEvent_Success_MotionEvent(t *testing.T) {
 }
 
 func TestPostEvent_Success_BellEvent(t *testing.T) {
-	mockClient := new(mockDetectorClient)
+	mockClient := new(testutil.MockDetectorClient)
 	mockClient.On("Analyze", mock.Anything, mock.MatchedBy(func(req *domain.EventRequest) bool {
 		return req.Type == domain.EventTypeBell
 	})).Return(&domain.EventData{IsIntruder: false}, nil)
@@ -109,7 +87,7 @@ func TestPostEvent_Success_BellEvent(t *testing.T) {
 }
 
 func TestPostEvent_BadRequest_MissingType(t *testing.T) {
-	mockClient := new(mockDetectorClient)
+	mockClient := new(testutil.MockDetectorClient)
 	router := setupRouter(mockClient)
 
 	body := []byte(`{"image":"base64data"}`)
@@ -124,7 +102,7 @@ func TestPostEvent_BadRequest_MissingType(t *testing.T) {
 }
 
 func TestPostEvent_BadRequest_MissingImage(t *testing.T) {
-	mockClient := new(mockDetectorClient)
+	mockClient := new(testutil.MockDetectorClient)
 	router := setupRouter(mockClient)
 
 	body := []byte(`{"type":"motion"}`)
@@ -139,7 +117,7 @@ func TestPostEvent_BadRequest_MissingImage(t *testing.T) {
 }
 
 func TestPostEvent_BadRequest_InvalidType(t *testing.T) {
-	mockClient := new(mockDetectorClient)
+	mockClient := new(testutil.MockDetectorClient)
 	router := setupRouter(mockClient)
 
 	body := []byte(`{"type":"unknown","image":"base64data"}`)
@@ -154,7 +132,7 @@ func TestPostEvent_BadRequest_InvalidType(t *testing.T) {
 }
 
 func TestPostEvent_InternalServerError_DetectorFailure(t *testing.T) {
-	mockClient := new(mockDetectorClient)
+	mockClient := new(testutil.MockDetectorClient)
 	mockClient.On("Analyze", mock.Anything, mock.Anything).Return(nil, assert.AnError)
 
 	router := setupRouter(mockClient)
