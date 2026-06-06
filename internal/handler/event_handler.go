@@ -21,18 +21,16 @@ func NewEventHandler(svc service.EventService) *EventHandler {
 
 // PostEvent godoc
 // @Summary      Report a security event
-// @Description  Receives a security event from an IoT microcontroller and propagates it to the detection service
+// @Description  Receives a security event from an IoT microcontroller and propagates it to the detection service. Requires valid mTLS client certificate.
 // @Tags         events
 // @Accept       json
 // @Produce      json
-// @Param        Authorization  header    string               true  "Bearer JWT token"
-// @Param        request        body      domain.EventRequest  true  "Event payload"
-// @Success      200            {object}  domain.EventResponse
-// @Failure      400            {object}  apierror.APIError
-// @Failure      401            {object}  apierror.APIError
-// @Failure      502            {object}  apierror.APIError
-// @Failure      500            {object}  apierror.APIError
-// @Security     BearerAuth
+// @Param        request  body  domain.EventRequest  true  "Event payload"
+// @Success      200      {object}  domain.EventResponse
+// @Failure      400      {object}  apierror.APIError
+// @Failure      401      {object}  apierror.APIError
+// @Failure      502      {object}  apierror.APIError
+// @Failure      500      {object}  apierror.APIError
 // @Router       /api/v1/events [post]
 func (h *EventHandler) PostEvent(c *gin.Context) {
 	var req domain.EventRequest
