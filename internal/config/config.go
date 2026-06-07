@@ -24,9 +24,9 @@ func Load() Config {
 		DetectorServiceURL: getEnv("DETECTOR_SERVICE_URL", "http://localhost:8081"),
 		AuthServiceURL:     getEnv("AUTH_SERVICE_URL", "http://localhost:8082"),
 		TLS: TLSConfig{
-			ServerCertPath: getEnv("SERVER_CERT_PATH", ""),
-			ServerKeyPath:  getEnv("SERVER_KEY_PATH", ""),
-			ClientCAPath:   getEnv("CLIENT_CA_PATH", ""),
+			ServerCertPEM: getEnv("SERVER_CERT_PEM", ""),
+			ServerKeyPEM:  getEnv("SERVER_KEY_PEM", ""),
+			ClientCAPEM:   getEnv("CLIENT_CA_PEM", ""),
 		},
 	}
 }
