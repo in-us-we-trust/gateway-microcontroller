@@ -61,7 +61,7 @@ jobs:
             --set-env-vars \
               DETECTOR_SERVICE_URL=${{ secrets.DETECTOR_SERVICE_URL }},\
               AUTH_SERVICE_URL=${{ secrets.AUTH_SERVICE_URL }},\
-              GIN_MODE=release, \
+              GIN_MODE=release,\
               SERVER_CERT_PEM="${{ secrets.SERVER_CERT_PEM }}",\
               SERVER_KEY_PEM="${{ secrets.SERVER_KEY_PEM }}",\
               CLIENT_CA_PEM="${{ secrets.CLIENT_CA_PEM }}"
