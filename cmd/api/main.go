@@ -11,12 +11,16 @@ import (
 	"gateway-microcontroller/internal/service"
 	"log"
 	"net/http"
-	"os"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
 )
+
+func normalizePEM(s string) string {
+	return strings.ReplaceAll(s, `\n`, "\n")
+}
 
 // @title           Secure Home Gateway API
 // @version         1.0
@@ -63,10 +67,13 @@ func main() {
 	}
 
 	log.Printf("starting server on :%s", cfg.Port)
-	if cfg.TLS.ServerCertPath != "" && cfg.TLS.ServerKeyPath != "" {
-		cert, err := tls.LoadX509KeyPair(cfg.TLS.ServerCertPath, cfg.TLS.ServerKeyPath)
+	if cfg.TLS.ServerCertPEM != "" && cfg.TLS.ServerKeyPEM != "" {
+		certPEM := []byte(normalizePEM(cfg.TLS.ServerCertPEM))
+		keyPEM := []byte(normalizePEM(cfg.TLS.ServerKeyPEM))
+
+		cert, err := tls.X509KeyPair(certPEM, keyPEM)
 		if err != nil {
-			log.Fatalf("failed to load server certificate: %v", err)
+			log.Fatalf("failed to parse server certificate: %v", err)
 		}
 
 		tlsConfig := &tls.Config{
@@ -75,14 +82,12 @@ func main() {
 			ClientAuth:   tls.RequireAndVerifyClientCert,
 		}
 
-		if cfg.TLS.ClientCAPath != "" {
-			caPEM, err := os.ReadFile(cfg.TLS.ClientCAPath)
-			if err != nil {
-				log.Fatalf("failed to read client CA file: %v", err)
-			}
-
+		if cfg.TLS.ClientCAPEM != "" {
 			pool := x509.NewCertPool()
-			if !pool.AppendCertsFromPEM(caPEM) {
+
+			if !pool.AppendCertsFromPEM(
+				[]byte(normalizePEM(cfg.TLS.ClientCAPEM)),
+			) {
 				log.Fatalf("failed to append client CA certificates")
 			}
 			tlsConfig.ClientCAs = pool
