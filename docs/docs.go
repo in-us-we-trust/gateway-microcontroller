@@ -17,12 +17,7 @@ const docTemplate = `{
     "paths": {
         "/api/v1/events": {
             "post": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "Receives a security event from an IoT microcontroller and propagates it to the detection service",
+                "description": "Receives a security event from an IoT microcontroller and propagates it to the detection service. Requires valid mTLS client certificate.",
                 "consumes": [
                     "application/json"
                 ],
@@ -34,13 +29,6 @@ const docTemplate = `{
                 ],
                 "summary": "Report a security event",
                 "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Bearer JWT token",
-                        "name": "Authorization",
-                        "in": "header",
-                        "required": true
-                    },
                     {
                         "description": "Event payload",
                         "name": "request",
@@ -166,13 +154,6 @@ const docTemplate = `{
                 "EventTypeMotion"
             ]
         }
-    },
-    "securityDefinitions": {
-        "BearerAuth": {
-            "type": "apiKey",
-            "name": "Authorization",
-            "in": "header"
-        }
     }
 }`
 
@@ -183,7 +164,7 @@ var SwaggerInfo = &swag.Spec{
 	BasePath:         "/",
 	Schemes:          []string{},
 	Title:            "Secure Home Gateway API",
-	Description:      "IoT gateway for the Secure Home project — routes microcontroller events to the detection service.",
+	Description:      "IoT gateway for the Secure Home project — routes microcontroller events to the detection service. All endpoints require mutual TLS (mTLS) client certificate authentication.",
 	InfoInstanceName: "swagger",
 	SwaggerTemplate:  docTemplate,
 	LeftDelim:        "{{",

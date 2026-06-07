@@ -10,6 +10,8 @@ import (
 type Config struct {
 	Port               string
 	DetectorServiceURL string
+	AuthServiceURL     string
+	TLS                TLSConfig
 }
 
 func Load() Config {
@@ -20,6 +22,12 @@ func Load() Config {
 	return Config{
 		Port:               getEnv("PORT", "8080"),
 		DetectorServiceURL: getEnv("DETECTOR_SERVICE_URL", "http://localhost:8081"),
+		AuthServiceURL:     getEnv("AUTH_SERVICE_URL", "http://localhost:8082"),
+		TLS: TLSConfig{
+			ServerCertPEM: getEnv("SERVER_CERT_PEM", ""),
+			ServerKeyPEM:  getEnv("SERVER_KEY_PEM", ""),
+			ClientCAPEM:   getEnv("CLIENT_CA_PEM", ""),
+		},
 	}
 }
 

@@ -2,22 +2,22 @@ package requestctx
 
 import "context"
 
-type ctxKey string
-
-const (
-	deviceIDKey    ctxKey = "device_id"
-	DeviceIDHeader        = "device_id"
-)
-
-func WithDeviceID(ctx context.Context, deviceID string) context.Context {
-	return context.WithValue(ctx, deviceIDKey, deviceID)
+type DeviceContext struct {
+	DeviceID string
+	Serial   string
 }
 
-func DeviceID(ctx context.Context) (string, bool) {
-	deviceID, ok := ctx.Value(deviceIDKey).(string)
-	if !ok || deviceID == "" {
-		return "", false
-	}
+type deviceContextKey struct{}
 
-	return deviceID, true
+const (
+	DeviceIDHeader = "device_id"
+)
+
+func WithDeviceContext(ctx context.Context, device DeviceContext) context.Context {
+	return context.WithValue(ctx, deviceContextKey{}, device)
+}
+
+func GetDeviceContext(ctx context.Context) (DeviceContext, bool) {
+	device, ok := ctx.Value(deviceContextKey{}).(DeviceContext)
+	return device, ok
 }

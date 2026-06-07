@@ -26,19 +26,22 @@ func NewHTTPDetectorClient(baseURL string) *HTTPDetectorClient {
 }
 
 func (c *HTTPDetectorClient) Analyze(ctx context.Context, req *domain.EventRequest) (*domain.EventData, error) {
+	device, ok := requestctx.GetDeviceContext(ctx)
+	if !ok || device.DeviceID == "" {
+		return nil, fmt.Errorf("device id not found in context")
+	}
+
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/events", bytes.NewReader(body))
+	url := fmt.Sprintf("%s/v1/devices/%s/events", c.baseURL, device.DeviceID)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	if deviceID, ok := requestctx.DeviceID(ctx); ok {
-		httpReq.Header.Set(requestctx.DeviceIDHeader, deviceID)
-	}
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {

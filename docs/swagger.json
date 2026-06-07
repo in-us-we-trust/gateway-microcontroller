@@ -1,7 +1,7 @@
 {
     "swagger": "2.0",
     "info": {
-        "description": "IoT gateway for the Secure Home project — routes microcontroller events to the detection service.",
+        "description": "IoT gateway for the Secure Home project — routes microcontroller events to the detection service. All endpoints require mutual TLS (mTLS) client certificate authentication.",
         "title": "Secure Home Gateway API",
         "contact": {},
         "version": "1.0"
@@ -11,12 +11,7 @@
     "paths": {
         "/api/v1/events": {
             "post": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "Receives a security event from an IoT microcontroller and propagates it to the detection service",
+                "description": "Receives a security event from an IoT microcontroller and propagates it to the detection service. Requires valid mTLS client certificate.",
                 "consumes": [
                     "application/json"
                 ],
@@ -28,13 +23,6 @@
                 ],
                 "summary": "Report a security event",
                 "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Bearer JWT token",
-                        "name": "Authorization",
-                        "in": "header",
-                        "required": true
-                    },
                     {
                         "description": "Event payload",
                         "name": "request",
@@ -159,13 +147,6 @@
                 "EventTypeBell",
                 "EventTypeMotion"
             ]
-        }
-    },
-    "securityDefinitions": {
-        "BearerAuth": {
-            "type": "apiKey",
-            "name": "Authorization",
-            "in": "header"
         }
     }
 }

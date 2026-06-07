@@ -4,3 +4,5 @@ vendor/
 *.test
 *.out
 .env
+**/*cert*/
+**/*certs*/
