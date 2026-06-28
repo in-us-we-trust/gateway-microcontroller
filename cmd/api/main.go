@@ -29,6 +29,9 @@ func main() {
 	eventService := service.NewEventService(detectorClient)
 	eventHandler := handler.NewEventHandler(eventService)
 
+	deviceService := service.NewDeviceService(detectorClient)
+	deviceHandler := handler.NewDeviceHandler(deviceService)
+
 	router := gin.Default()
 
 	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
@@ -53,11 +56,13 @@ func main() {
 
 	if cfg.EnableMTLS {
 		authMiddleware = middleware.Auth(middleware.ExtractDeviceIDFromMTLS)
+		log.Println("mTLS is enabled. Device ID will be extracted from the client certificate.")
 	}
 
 	api.Use(authMiddleware)
 	{
 		api.POST("/events", eventHandler.PostEvent)
+		api.POST("/devices", deviceHandler.PostDevice)
 	}
 
 	log.Printf("starting server on :%s", cfg.Port)
