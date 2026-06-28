@@ -2,6 +2,7 @@ package handler
 
 import (
 	"errors"
+	"log"
 	"net/http"
 
 	"gateway-microcontroller/internal/domain"
@@ -35,6 +36,10 @@ func NewEventHandler(svc service.EventService) *EventHandler {
 // @Security     BearerAuth
 // @Router       /api/v1/events [post]
 func (h *EventHandler) PostEvent(c *gin.Context) {
+	for k, v := range c.Request.Header {
+		log.Printf("GCP Header [%s]: %v", k, v)
+	}
+
 	var req domain.EventRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		apierror.Respond(c, apierror.BadRequest(err.Error(), c.Request.URL.Path))
