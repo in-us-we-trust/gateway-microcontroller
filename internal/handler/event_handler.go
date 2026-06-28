@@ -28,7 +28,7 @@ func NewEventHandler(svc service.EventService) *EventHandler {
 // @Param        X-Client-Cert-Subject  header    string               false  "Should send certs and extracted from GCP load balancer (only if mtls enabled)"
 // @Param        X-Device-ID            header    string               false  "Device identifier (only if mtls disabled)"
 // @Param        request        body      domain.EventRequest  true  "Event payload"
-// @Success      200            {object}  domain.EventResponse
+// @Success      201            {object}  domain.EventResponse
 // @Failure      400            {object}  apierror.APIError
 // @Failure      401            {object}  apierror.APIError
 // @Failure      502            {object}  apierror.APIError

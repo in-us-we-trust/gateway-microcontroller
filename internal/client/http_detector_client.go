@@ -9,6 +9,7 @@ import (
 
 	"gateway-microcontroller/internal/domain"
 	"gateway-microcontroller/internal/requestctx"
+	"gateway-microcontroller/internal/util"
 )
 
 type HTTPDetectorClient struct {
@@ -50,7 +51,7 @@ func (c *HTTPDetectorClient) Analyze(ctx context.Context, req *domain.EventReque
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusCreated {
+	if !util.Is2xx(resp.StatusCode) {
 		var errBody struct {
 			Detail string `json:"detail"`
 		}
