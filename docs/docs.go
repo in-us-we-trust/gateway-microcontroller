@@ -36,10 +36,15 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Bearer JWT token",
-                        "name": "Authorization",
-                        "in": "header",
-                        "required": true
+                        "description": "Should send certs and extracted from GCP load balancer (only if mtls enabled)",
+                        "name": "X-Client-Cert-Subject",
+                        "in": "header"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Device identifier (only if mtls disabled)",
+                        "name": "X-Device-ID",
+                        "in": "header"
                     },
                     {
                         "description": "Event payload",
@@ -119,8 +124,26 @@ const docTemplate = `{
         "domain.EventData": {
             "type": "object",
             "properties": {
-                "is_intruder": {
+                "deviceId": {
+                    "type": "string"
+                },
+                "eventId": {
+                    "type": "string"
+                },
+                "eventType": {
+                    "type": "string"
+                },
+                "faceRecognition": {
+                    "$ref": "#/definitions/domain.FaceRecognition"
+                },
+                "imageUrl": {
+                    "type": "string"
+                },
+                "isIntruder": {
                     "type": "boolean"
+                },
+                "timestamp": {
+                    "type": "string"
                 }
             }
         },
@@ -165,6 +188,32 @@ const docTemplate = `{
                 "EventTypeBell",
                 "EventTypeMotion"
             ]
+        },
+        "domain.FaceRecognition": {
+            "type": "object",
+            "properties": {
+                "closest_match": {
+                    "type": "string"
+                },
+                "detector_backend": {
+                    "type": "string"
+                },
+                "distance": {
+                    "type": "number"
+                },
+                "distance_metric": {
+                    "type": "string"
+                },
+                "known": {
+                    "type": "boolean"
+                },
+                "model_name": {
+                    "type": "string"
+                },
+                "threshold": {
+                    "type": "number"
+                }
+            }
         }
     },
     "securityDefinitions": {
