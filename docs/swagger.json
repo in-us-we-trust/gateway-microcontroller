@@ -51,10 +51,85 @@
                     }
                 ],
                 "responses": {
-                    "200": {
-                        "description": "OK",
+                    "201": {
+                        "description": "Created",
                         "schema": {
                             "$ref": "#/definitions/domain.EventResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/apierror.APIError"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/apierror.APIError"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/apierror.APIError"
+                        }
+                    },
+                    "502": {
+                        "description": "Bad Gateway",
+                        "schema": {
+                            "$ref": "#/definitions/apierror.APIError"
+                        }
+                    }
+                }
+            }
+        },
+        "/devices": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Registers a new IoT device with the devices controller",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "devices"
+                ],
+                "summary": "Register a new device",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Should send certs and extracted from GCP load balancer (only if mtls enabled)",
+                        "name": "X-Client-Cert-Subject",
+                        "in": "header"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Device identifier (only if mtls disabled)",
+                        "name": "X-Device-ID",
+                        "in": "header"
+                    },
+                    {
+                        "description": "Device registration payload",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/domain.DeviceRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/domain.DeviceResponse"
                         }
                     },
                     "400": {
@@ -115,29 +190,126 @@
                 }
             }
         },
+        "domain.DeviceData": {
+            "type": "object",
+            "properties": {
+                "city": {
+                    "type": "string",
+                    "example": "San Miguel"
+                },
+                "detectionThreshold": {
+                    "type": "number",
+                    "example": 85
+                },
+                "firmwareVersion": {
+                    "type": "string",
+                    "example": "v1.3.7"
+                },
+                "id": {
+                    "type": "string",
+                    "example": "9df4a749-3ec2-43b9-bc42-35d2b6b5b173"
+                },
+                "lastBoot": {
+                    "type": "string",
+                    "example": "2026-06-27T17:45:00Z"
+                },
+                "lastSeen": {
+                    "type": "string",
+                    "example": "2026-06-27T18:30:00Z"
+                },
+                "location": {
+                    "type": "string",
+                    "example": "Main Entrance"
+                },
+                "serialNumber": {
+                    "type": "string",
+                    "example": "ESP32-000001"
+                },
+                "status": {
+                    "type": "string",
+                    "example": "UNCLAIMED"
+                },
+                "uptime": {
+                    "type": "integer",
+                    "example": 2700
+                }
+            }
+        },
+        "domain.DeviceRequest": {
+            "type": "object",
+            "required": [
+                "lastBoot",
+                "lastSeen",
+                "serialNumber"
+            ],
+            "properties": {
+                "city": {
+                    "type": "string",
+                    "example": "San Miguel"
+                },
+                "detectionThreshold": {
+                    "type": "number",
+                    "example": 85
+                },
+                "firmwareVersion": {
+                    "type": "string",
+                    "example": "v1.3.7"
+                },
+                "lastBoot": {
+                    "type": "string",
+                    "example": "2026-06-27T17:45:00Z"
+                },
+                "lastSeen": {
+                    "type": "string",
+                    "example": "2026-06-27T18:30:00Z"
+                },
+                "location": {
+                    "type": "string",
+                    "example": "Front door"
+                },
+                "serialNumber": {
+                    "type": "string",
+                    "example": "ESP32-000001"
+                }
+            }
+        },
+        "domain.DeviceResponse": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/domain.DeviceData"
+                }
+            }
+        },
         "domain.EventData": {
             "type": "object",
             "properties": {
                 "deviceId": {
-                    "type": "string"
+                    "type": "string",
+                    "example": "9df4a749-3ec2-43b9-bc42-35d2b6b5b173"
                 },
                 "eventId": {
-                    "type": "string"
+                    "type": "string",
+                    "example": "3fa85f64-5717-4562-b3fc-2c963f66afa6"
                 },
                 "eventType": {
-                    "type": "string"
+                    "type": "string",
+                    "example": "motion"
                 },
                 "faceRecognition": {
                     "$ref": "#/definitions/domain.FaceRecognition"
                 },
                 "imageUrl": {
-                    "type": "string"
+                    "type": "string",
+                    "example": "https://storage.example.com/events/3fa85f64-5717-4562-b3fc-2c963f66afa6.jpg"
                 },
                 "isIntruder": {
-                    "type": "boolean"
+                    "type": "boolean",
+                    "example": true
                 },
                 "timestamp": {
-                    "type": "string"
+                    "type": "string",
+                    "example": "2026-06-28T21:19:59.466Z"
                 }
             }
         },
@@ -149,7 +321,8 @@
             ],
             "properties": {
                 "image": {
-                    "type": "string"
+                    "type": "string",
+                    "example": "/9j/4AAQSkZJRgABAQAAAQABAAD..."
                 },
                 "type": {
                     "enum": [
@@ -160,7 +333,8 @@
                         {
                             "$ref": "#/definitions/domain.EventType"
                         }
-                    ]
+                    ],
+                    "example": "motion"
                 }
             }
         },
@@ -187,25 +361,32 @@
             "type": "object",
             "properties": {
                 "closest_match": {
-                    "type": "string"
+                    "type": "string",
+                    "example": "John Doe"
                 },
                 "detector_backend": {
-                    "type": "string"
+                    "type": "string",
+                    "example": "retinaface"
                 },
                 "distance": {
-                    "type": "number"
+                    "type": "number",
+                    "example": 0.82
                 },
                 "distance_metric": {
-                    "type": "string"
+                    "type": "string",
+                    "example": "cosine"
                 },
                 "known": {
-                    "type": "boolean"
+                    "type": "boolean",
+                    "example": false
                 },
                 "model_name": {
-                    "type": "string"
+                    "type": "string",
+                    "example": "Facenet512"
                 },
                 "threshold": {
-                    "type": "number"
+                    "type": "number",
+                    "example": 0.6
                 }
             }
         }

@@ -35,6 +35,14 @@ func (m *mockDetectorClient) Analyze(ctx context.Context, req *domain.EventReque
 	return args.Get(0).(*domain.EventData), args.Error(1)
 }
 
+func (m *mockDetectorClient) RegisterDevice(ctx context.Context, req *domain.DeviceRequest) (*domain.DeviceResponse, error) {
+	args := m.Called(ctx, req)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.DeviceResponse), args.Error(1)
+}
+
 var _ client.DetectorClient = (*mockDetectorClient)(nil)
 
 func testSubjectHeader(deviceID string) string {

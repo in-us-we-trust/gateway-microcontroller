@@ -21,26 +21,99 @@ definitions:
         example: about:blank
         type: string
     type: object
+  domain.DeviceData:
+    properties:
+      city:
+        example: San Miguel
+        type: string
+      detectionThreshold:
+        example: 85
+        type: number
+      firmwareVersion:
+        example: v1.3.7
+        type: string
+      id:
+        example: 9df4a749-3ec2-43b9-bc42-35d2b6b5b173
+        type: string
+      lastBoot:
+        example: "2026-06-27T17:45:00Z"
+        type: string
+      lastSeen:
+        example: "2026-06-27T18:30:00Z"
+        type: string
+      location:
+        example: Main Entrance
+        type: string
+      serialNumber:
+        example: ESP32-000001
+        type: string
+      status:
+        example: UNCLAIMED
+        type: string
+      uptime:
+        example: 2700
+        type: integer
+    type: object
+  domain.DeviceRequest:
+    properties:
+      city:
+        example: San Miguel
+        type: string
+      detectionThreshold:
+        example: 85
+        type: number
+      firmwareVersion:
+        example: v1.3.7
+        type: string
+      lastBoot:
+        example: "2026-06-27T17:45:00Z"
+        type: string
+      lastSeen:
+        example: "2026-06-27T18:30:00Z"
+        type: string
+      location:
+        example: Front door
+        type: string
+      serialNumber:
+        example: ESP32-000001
+        type: string
+    required:
+    - lastBoot
+    - lastSeen
+    - serialNumber
+    type: object
+  domain.DeviceResponse:
+    properties:
+      data:
+        $ref: '#/definitions/domain.DeviceData'
+    type: object
   domain.EventData:
     properties:
       deviceId:
+        example: 9df4a749-3ec2-43b9-bc42-35d2b6b5b173
         type: string
       eventId:
+        example: 3fa85f64-5717-4562-b3fc-2c963f66afa6
         type: string
       eventType:
+        example: motion
         type: string
       faceRecognition:
         $ref: '#/definitions/domain.FaceRecognition'
       imageUrl:
+        example: https://storage.example.com/events/3fa85f64-5717-4562-b3fc-2c963f66afa6.jpg
         type: string
       isIntruder:
+        example: true
         type: boolean
       timestamp:
+        example: "2026-06-28T21:19:59.466Z"
         type: string
     type: object
   domain.EventRequest:
     properties:
       image:
+        example: /9j/4AAQSkZJRgABAQAAAQABAAD...
         type: string
       type:
         allOf:
@@ -48,6 +121,7 @@ definitions:
         enum:
         - bell
         - motion
+        example: motion
     required:
     - image
     - type
@@ -68,18 +142,25 @@ definitions:
   domain.FaceRecognition:
     properties:
       closest_match:
+        example: John Doe
         type: string
       detector_backend:
+        example: retinaface
         type: string
       distance:
+        example: 0.82
         type: number
       distance_metric:
+        example: cosine
         type: string
       known:
+        example: false
         type: boolean
       model_name:
+        example: Facenet512
         type: string
       threshold:
+        example: 0.6
         type: number
     type: object
 host: localhost:8080
@@ -115,8 +196,8 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
-          description: OK
+        "201":
+          description: Created
           schema:
             $ref: '#/definitions/domain.EventResponse'
         "400":
@@ -140,6 +221,55 @@ paths:
       summary: Report a security event
       tags:
       - events
+  /devices:
+    post:
+      consumes:
+      - application/json
+      description: Registers a new IoT device with the devices controller
+      parameters:
+      - description: Should send certs and extracted from GCP load balancer (only
+          if mtls enabled)
+        in: header
+        name: X-Client-Cert-Subject
+        type: string
+      - description: Device identifier (only if mtls disabled)
+        in: header
+        name: X-Device-ID
+        type: string
+      - description: Device registration payload
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/domain.DeviceRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/domain.DeviceResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/apierror.APIError'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/apierror.APIError'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/apierror.APIError'
+        "502":
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/apierror.APIError'
+      security:
+      - BearerAuth: []
+      summary: Register a new device
+      tags:
+      - devices
 securityDefinitions:
   BearerAuth:
     in: header

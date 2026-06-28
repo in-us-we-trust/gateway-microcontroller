@@ -8,4 +8,5 @@ import (
 
 type DetectorClient interface {
 	Analyze(ctx context.Context, req *domain.EventRequest) (*domain.EventData, error)
+	RegisterDevice(ctx context.Context, req *domain.DeviceRequest) (*domain.DeviceResponse, error)
 }
