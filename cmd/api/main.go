@@ -48,7 +48,14 @@ func main() {
 	})
 
 	api := router.Group("/api/v1")
-	api.Use(middleware.JWTAuth())
+
+	authMiddleware := middleware.Auth(middleware.ExtractDeviceIDFromHeader)
+
+	if cfg.EnableMTLS {
+		authMiddleware = middleware.Auth(middleware.ExtractDeviceIDFromMTLS)
+	}
+
+	api.Use(authMiddleware)
 	{
 		api.POST("/events", eventHandler.PostEvent)
 	}

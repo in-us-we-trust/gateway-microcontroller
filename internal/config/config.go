@@ -10,6 +10,7 @@ import (
 type Config struct {
 	Port               string
 	DetectorServiceURL string
+	EnableMTLS         bool
 }
 
 func Load() Config {
@@ -20,6 +21,7 @@ func Load() Config {
 	return Config{
 		Port:               getEnv("PORT", "8080"),
 		DetectorServiceURL: getEnv("DETECTOR_SERVICE_URL", "http://localhost:8081"),
+		EnableMTLS:         getEnv("ENABLE_MTLS", "true") == "true",
 	}
 }
 

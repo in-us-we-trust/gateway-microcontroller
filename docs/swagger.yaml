@@ -23,8 +23,20 @@ definitions:
     type: object
   domain.EventData:
     properties:
-      is_intruder:
+      deviceId:
+        type: string
+      eventId:
+        type: string
+      eventType:
+        type: string
+      faceRecognition:
+        $ref: '#/definitions/domain.FaceRecognition'
+      imageUrl:
+        type: string
+      isIntruder:
         type: boolean
+      timestamp:
+        type: string
     type: object
   domain.EventRequest:
     properties:
@@ -53,6 +65,23 @@ definitions:
     x-enum-varnames:
     - EventTypeBell
     - EventTypeMotion
+  domain.FaceRecognition:
+    properties:
+      closest_match:
+        type: string
+      detector_backend:
+        type: string
+      distance:
+        type: number
+      distance_metric:
+        type: string
+      known:
+        type: boolean
+      model_name:
+        type: string
+      threshold:
+        type: number
+    type: object
 host: localhost:8080
 info:
   contact: {}
@@ -68,10 +97,14 @@ paths:
       description: Receives a security event from an IoT microcontroller and propagates
         it to the detection service
       parameters:
-      - description: Bearer JWT token
+      - description: Should send certs and extracted from GCP load balancer (only
+          if mtls enabled)
         in: header
-        name: Authorization
-        required: true
+        name: X-Client-Cert-Subject
+        type: string
+      - description: Device identifier (only if mtls disabled)
+        in: header
+        name: X-Device-ID
         type: string
       - description: Event payload
         in: body

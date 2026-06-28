@@ -9,6 +9,7 @@ import (
 
 	"gateway-microcontroller/internal/domain"
 	"gateway-microcontroller/internal/requestctx"
+	"gateway-microcontroller/internal/util"
 )
 
 type HTTPDetectorClient struct {
@@ -31,14 +32,18 @@ func (c *HTTPDetectorClient) Analyze(ctx context.Context, req *domain.EventReque
 		return nil, err
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/events", bytes.NewReader(body))
+	deviceID, ok := requestctx.DeviceID(ctx)
+	if !ok {
+		return nil, fmt.Errorf("device ID not found in request context")
+	}
+
+	url := fmt.Sprintf("%s/v1/devices/%s/events", c.baseURL, deviceID)
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	if deviceID, ok := requestctx.DeviceID(ctx); ok {
-		httpReq.Header.Set(requestctx.DeviceIDHeader, deviceID)
-	}
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
@@ -46,7 +51,7 @@ func (c *HTTPDetectorClient) Analyze(ctx context.Context, req *domain.EventReque
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	if !util.Is2xx(resp.StatusCode) {
 		var errBody struct {
 			Detail string `json:"detail"`
 		}
@@ -61,10 +66,10 @@ func (c *HTTPDetectorClient) Analyze(ctx context.Context, req *domain.EventReque
 		}
 	}
 
-	var data domain.EventData
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+	var response domain.EventResponse
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
 		return nil, err
 	}
 
-	return &data, nil
+	return &response.Data, nil
 }

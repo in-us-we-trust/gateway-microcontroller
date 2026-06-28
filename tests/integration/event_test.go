@@ -3,9 +3,10 @@ package integration_test
 import (
 	"bytes"
 	"context"
+	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -36,50 +37,78 @@ func (m *mockDetectorClient) Analyze(ctx context.Context, req *domain.EventReque
 
 var _ client.DetectorClient = (*mockDetectorClient)(nil)
 
-func testJWT(deviceID string) string {
-	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none","typ":"JWT"}`))
-	payload := base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf(`{"device_id":"%s"}`, deviceID)))
-	return header + "." + payload + ".signature"
+func testSubjectHeader(deviceID string) string {
+	name := pkix.Name{
+		CommonName:         deviceID,
+		Organization:       []string{"HogarSeguro"},
+		OrganizationalUnit: []string{"IoT"},
+	}
+
+	rdn := name.ToRDNSequence()
+
+	der, err := asn1.Marshal(rdn)
+	if err != nil {
+		panic(err)
+	}
+
+	return base64.StdEncoding.EncodeToString(der)
 }
 
 func setupRouter(c client.DetectorClient) *gin.Engine {
 	gin.SetMode(gin.TestMode)
+
 	svc := service.NewEventService(c)
 	h := handler.NewEventHandler(svc)
 
 	r := gin.New()
 	api := r.Group("/api/v1")
-	api.Use(middleware.JWTAuth())
+	api.Use(middleware.Auth(middleware.ExtractDeviceIDFromMTLS))
 	api.POST("/events", h.PostEvent)
+
 	return r
 }
 
 func TestPostEvent_Success_MotionEvent(t *testing.T) {
 	mockClient := new(mockDetectorClient)
-	mockClient.On("Analyze",
+
+	mockClient.On(
+		"Analyze",
 		mock.MatchedBy(func(ctx context.Context) bool {
 			deviceID, ok := requestctx.DeviceID(ctx)
 			return ok && deviceID == "device-123"
 		}),
 		mock.MatchedBy(func(req *domain.EventRequest) bool {
-			return req.Type == domain.EventTypeMotion && req.Image == "base64data"
+			return req.Type == domain.EventTypeMotion &&
+				req.Image == "base64data"
 		}),
-	).Return(&domain.EventData{IsIntruder: true}, nil)
+	).Return(&domain.EventData{
+		EventID:    "event-123",
+		DeviceID:   "device-123",
+		EventType:  "motion",
+		IsIntruder: true,
+	}, nil)
 
 	router := setupRouter(mockClient)
 
-	body, _ := json.Marshal(domain.EventRequest{Type: domain.EventTypeMotion, Image: "base64data"})
+	body, _ := json.Marshal(domain.EventRequest{
+		Type:  domain.EventTypeMotion,
+		Image: "base64data",
+	})
+
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/events", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+testJWT("device-123"))
+	req.Header.Set("X-Client-Cert-Subject", testSubjectHeader("device-123"))
 
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, http.StatusCreated, w.Code)
 
 	var resp domain.EventResponse
 	assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "event-123", resp.Data.EventID)
+	assert.Equal(t, "device-123", resp.Data.DeviceID)
+	assert.Equal(t, "motion", resp.Data.EventType)
 	assert.True(t, resp.Data.IsIntruder)
 
 	mockClient.AssertExpectations(t)
@@ -87,24 +116,41 @@ func TestPostEvent_Success_MotionEvent(t *testing.T) {
 
 func TestPostEvent_Success_BellEvent(t *testing.T) {
 	mockClient := new(mockDetectorClient)
-	mockClient.On("Analyze", mock.Anything, mock.MatchedBy(func(req *domain.EventRequest) bool {
-		return req.Type == domain.EventTypeBell
-	})).Return(&domain.EventData{IsIntruder: false}, nil)
+
+	mockClient.On(
+		"Analyze",
+		mock.Anything,
+		mock.MatchedBy(func(req *domain.EventRequest) bool {
+			return req.Type == domain.EventTypeBell
+		}),
+	).Return(&domain.EventData{
+		EventID:    "event-456",
+		DeviceID:   "device-123",
+		EventType:  "bell",
+		IsIntruder: false,
+	}, nil)
 
 	router := setupRouter(mockClient)
 
-	body, _ := json.Marshal(domain.EventRequest{Type: domain.EventTypeBell, Image: "base64data"})
+	body, _ := json.Marshal(domain.EventRequest{
+		Type:  domain.EventTypeBell,
+		Image: "base64data",
+	})
+
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/events", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+testJWT("device-123"))
+	req.Header.Set("X-Client-Cert-Subject", testSubjectHeader("device-123"))
 
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, http.StatusCreated, w.Code)
 
 	var resp domain.EventResponse
 	assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "event-456", resp.Data.EventID)
+	assert.Equal(t, "device-123", resp.Data.DeviceID)
+	assert.Equal(t, "bell", resp.Data.EventType)
 	assert.False(t, resp.Data.IsIntruder)
 
 	mockClient.AssertExpectations(t)
@@ -114,7 +160,11 @@ func TestPostEvent_Unauthorized_MissingHeader(t *testing.T) {
 	mockClient := new(mockDetectorClient)
 	router := setupRouter(mockClient)
 
-	body, _ := json.Marshal(domain.EventRequest{Type: domain.EventTypeMotion, Image: "base64data"})
+	body, _ := json.Marshal(domain.EventRequest{
+		Type:  domain.EventTypeMotion,
+		Image: "base64data",
+	})
+
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/events", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 
@@ -136,9 +186,10 @@ func TestPostEvent_BadRequest_MissingType(t *testing.T) {
 	router := setupRouter(mockClient)
 
 	body := []byte(`{"image":"base64data"}`)
+
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/events", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+testJWT("device-123"))
+	req.Header.Set("X-Client-Cert-Subject", testSubjectHeader("device-123"))
 
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -152,9 +203,10 @@ func TestPostEvent_BadRequest_MissingImage(t *testing.T) {
 	router := setupRouter(mockClient)
 
 	body := []byte(`{"type":"motion"}`)
+
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/events", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+testJWT("device-123"))
+	req.Header.Set("X-Client-Cert-Subject", testSubjectHeader("device-123"))
 
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -168,9 +220,10 @@ func TestPostEvent_BadRequest_InvalidType(t *testing.T) {
 	router := setupRouter(mockClient)
 
 	body := []byte(`{"type":"unknown","image":"base64data"}`)
+
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/events", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+testJWT("device-123"))
+	req.Header.Set("X-Client-Cert-Subject", testSubjectHeader("device-123"))
 
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -185,10 +238,14 @@ func TestPostEvent_InternalServerError_DetectorFailure(t *testing.T) {
 
 	router := setupRouter(mockClient)
 
-	body, _ := json.Marshal(domain.EventRequest{Type: domain.EventTypeMotion, Image: "base64data"})
+	body, _ := json.Marshal(domain.EventRequest{
+		Type:  domain.EventTypeMotion,
+		Image: "base64data",
+	})
+
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/events", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+testJWT("device-123"))
+	req.Header.Set("X-Client-Cert-Subject", testSubjectHeader("device-123"))
 
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -197,14 +254,18 @@ func TestPostEvent_InternalServerError_DetectorFailure(t *testing.T) {
 	mockClient.AssertExpectations(t)
 }
 
-func TestPostEvent_Unauthorized_InvalidJWTPayload(t *testing.T) {
+func TestPostEvent_Unauthorized_InvalidClientCertSubject(t *testing.T) {
 	mockClient := new(mockDetectorClient)
 	router := setupRouter(mockClient)
 
-	body, _ := json.Marshal(domain.EventRequest{Type: domain.EventTypeMotion, Image: "base64data"})
+	body, _ := json.Marshal(domain.EventRequest{
+		Type:  domain.EventTypeMotion,
+		Image: "base64data",
+	})
+
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/events", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer invalid.token")
+	req.Header.Set("X-Client-Cert-Subject", "not-base64")
 
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)

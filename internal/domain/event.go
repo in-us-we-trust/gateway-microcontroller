@@ -13,7 +13,23 @@ type EventRequest struct {
 }
 
 type EventData struct {
-	IsIntruder bool `json:"is_intruder"`
+	EventID         string          `json:"eventId"`
+	DeviceID        string          `json:"deviceId"`
+	Timestamp       string          `json:"timestamp"`
+	ImageURL        string          `json:"imageUrl"`
+	EventType       string          `json:"eventType"`
+	FaceRecognition FaceRecognition `json:"faceRecognition"`
+	IsIntruder      bool            `json:"isIntruder"`
+}
+
+type FaceRecognition struct {
+	Known           bool     `json:"known"`
+	Threshold       float64  `json:"threshold"`
+	Distance        *float64 `json:"distance"`
+	DistanceMetric  string   `json:"distance_metric"`
+	ClosestMatch    *string  `json:"closest_match"`
+	ModelName       string   `json:"model_name"`
+	DetectorBackend string   `json:"detector_backend"`
 }
 
 type EventResponse struct {

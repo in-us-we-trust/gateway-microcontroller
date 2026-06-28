@@ -2,7 +2,6 @@ package handler
 
 import (
 	"errors"
-	"log"
 	"net/http"
 
 	"gateway-microcontroller/internal/domain"
@@ -26,9 +25,10 @@ func NewEventHandler(svc service.EventService) *EventHandler {
 // @Tags         events
 // @Accept       json
 // @Produce      json
-// @Param        Authorization  header    string               true  "Bearer JWT token"
+// @Param        X-Client-Cert-Subject  header    string               false  "Should send certs and extracted from GCP load balancer (only if mtls enabled)"
+// @Param        X-Device-ID            header    string               false  "Device identifier (only if mtls disabled)"
 // @Param        request        body      domain.EventRequest  true  "Event payload"
-// @Success      200            {object}  domain.EventResponse
+// @Success      201            {object}  domain.EventResponse
 // @Failure      400            {object}  apierror.APIError
 // @Failure      401            {object}  apierror.APIError
 // @Failure      502            {object}  apierror.APIError
@@ -36,10 +36,6 @@ func NewEventHandler(svc service.EventService) *EventHandler {
 // @Security     BearerAuth
 // @Router       /api/v1/events [post]
 func (h *EventHandler) PostEvent(c *gin.Context) {
-	for k, v := range c.Request.Header {
-		log.Printf("GCP Header [%s]: %v", k, v)
-	}
-
 	var req domain.EventRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		apierror.Respond(c, apierror.BadRequest(err.Error(), c.Request.URL.Path))
@@ -57,5 +53,5 @@ func (h *EventHandler) PostEvent(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, resp)
+	c.JSON(http.StatusCreated, resp)
 }
