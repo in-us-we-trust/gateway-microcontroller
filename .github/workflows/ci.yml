@@ -52,7 +52,7 @@ jobs:
       - name: Run tests with coverage
         env:
           PORT: 8080
-          DETECTOR_SERVICE_URL: http://localhost:8087/api/detective-manager
+          DETECTIVE_MANAGER_URL: http://localhost:8087/api/detective-manager
         run: |
           go test ./... -coverprofile=coverage.out
 

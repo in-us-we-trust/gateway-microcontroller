@@ -43,6 +43,14 @@ func (m *mockDetectorClient) RegisterDevice(ctx context.Context, req *domain.Dev
 	return args.Get(0).(*domain.DeviceResponse), args.Error(1)
 }
 
+func (m *mockDetectorClient) SendMediaEvent(ctx context.Context, req domain.MediaEventRequest) (*domain.OrchestratorEventData, error) {
+	args := m.Called(ctx, req)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.OrchestratorEventData), args.Error(1)
+}
+
 var _ client.DetectorClient = (*mockDetectorClient)(nil)
 
 func testSubjectHeader(deviceID string) string {
