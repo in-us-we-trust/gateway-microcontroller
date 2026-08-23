@@ -1,11 +1,93 @@
 package domain
 
+import "time"
+
 type EventType string
+
+type MediaType string
 
 const (
 	EventTypeBell   EventType = "bell"
 	EventTypeMotion EventType = "motion"
+
+	MediaTypeImage MediaType = "IMAGE"
+	MediaTypeAudio MediaType = "AUDIO"
+	MediaTypeVideo MediaType = "VIDEO"
+
+	DeviceActionContinue   = "CONTINUE"
+	DeviceActionStopDanger = "STOP_DANGER"
 )
+
+type DoorbellPressEvent struct {
+	EventID           string  `json:"eventId"`
+	DeviceID          string  `json:"deviceId"`
+	Timestamp         int64   `json:"timestamp"`
+	Event             string  `json:"event,omitempty"`
+	Image             string  `json:"image,omitempty"`
+	RTSPURL           string  `json:"rtspUrl"`
+	BatteryPercentage float64 `json:"batteryPercentage"`
+}
+
+type CaptureEvent struct {
+	EventID   string `json:"eventId,omitempty"`
+	TrackID   string `json:"trackId,omitempty"`
+	DeviceID  string `json:"deviceId"`
+	Timestamp int64  `json:"timestamp,omitempty"`
+	RTSPURL   string `json:"rtspUrl,omitempty"`
+}
+type StreamEndEvent struct {
+	EventID   string `json:"eventId,omitempty"`
+	TrackID   string `json:"trackId,omitempty"`
+	DeviceID  string `json:"deviceId"`
+	Timestamp int64  `json:"timestamp,omitempty"`
+}
+
+type MediaEventRequest struct {
+	TrackID     string
+	DeviceID    string
+	MediaType   MediaType
+	FileName    string
+	Buffer      []byte
+	StartedAt   time.Time
+	ChunkNumber int
+}
+
+type DeviceMediaEvent struct {
+	EventID   string `json:"eventId,omitempty"`
+	TrackID   string `json:"trackId,omitempty"`
+	DeviceID  string `json:"deviceId"`
+	Timestamp int64  `json:"timestamp,omitempty"`
+	FileName  string `json:"fileName,omitempty"`
+	Data      string `json:"data"`
+}
+
+type OrchestratorAssessment struct {
+	Status   string `json:"status"`
+	Severity string `json:"severity"`
+	Message  string `json:"message"`
+	Verdict  string `json:"verdict"`
+}
+
+type OrchestratorEventData struct {
+	TrackID       string                   `json:"trackId"`
+	ChunkType     string                   `json:"chunkType"`
+	FinalVerdict  *string                  `json:"finalVerdict"`
+	FinalSeverity *string                  `json:"finalSeverity"`
+	Assessments   []OrchestratorAssessment `json:"assessments"`
+}
+
+type OrchestratorEventResponse struct {
+	Data OrchestratorEventData `json:"data"`
+}
+
+type DeviceInstruction struct {
+	TrackID   string `json:"trackId"`
+	DeviceID  string `json:"deviceId"`
+	ChunkType string `json:"chunkType"`
+	Action    string `json:"action"`
+	Severity  string `json:"severity"`
+	Message   string `json:"message"`
+}
 
 type EventRequest struct {
 	Type  EventType `json:"type" binding:"required,oneof=bell motion" example:"motion"`

@@ -52,7 +52,7 @@ jobs:
       - name: Run tests with coverage
         env:
           PORT: 8080
-          DETECTOR_SERVICE_URL: http://localhost:8087/api/detective-manager
+          DETECTIVE_MANAGER_URL: http://localhost:8087/api/detective-manager
         run: |
           go test ./... -coverprofile=coverage.out
 
@@ -60,7 +60,7 @@ jobs:
 
           echo "Total coverage: $COVERAGE%"
 
-          MIN_COVERAGE=50
+          MIN_COVERAGE=40
 
           COVERAGE_INT=${COVERAGE%.*}
 

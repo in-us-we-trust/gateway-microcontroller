@@ -12,6 +12,8 @@ FROM alpine:3.19
 
 WORKDIR /app
 
+RUN apk add --no-cache ca-certificates ffmpeg
+
 COPY --from=builder /app/server .
 
 EXPOSE 8080

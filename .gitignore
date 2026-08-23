@@ -4,3 +4,5 @@ vendor/
 *.test
 *.out
 .env
+media/source.mp4
+debug-chunks/

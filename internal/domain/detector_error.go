@@ -4,6 +4,7 @@ import "fmt"
 
 const (
 	ErrCodeDetectorAnalysis = "DTE-001"
+	ErrCodeMediaDispatch    = "DTE-002"
 )
 
 type DetectorError struct {

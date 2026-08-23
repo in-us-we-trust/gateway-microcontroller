@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -15,7 +16,10 @@ type loggingRoundTripper struct {
 func (l *loggingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	start := time.Now()
 
-	reqBody := readAndRestoreBody(&req.Body)
+	reqBody := "<multipart body omitted>"
+	if !strings.HasPrefix(req.Header.Get("Content-Type"), "multipart/form-data") {
+		reqBody = readAndRestoreBody(&req.Body)
+	}
 
 	resp, err := l.next.RoundTrip(req)
 

@@ -27,7 +27,7 @@ import (
 var _ client.DetectorClient = (*mockDetectorClient)(nil)
 
 /* =========================
-   TEST SETUP (ALINEADO A EVENTS)
+   TEST SETUP
 ========================= */
 
 func setupDeviceRouter(c client.DetectorClient) *gin.Engine {

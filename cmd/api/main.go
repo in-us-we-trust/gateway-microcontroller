@@ -8,7 +8,9 @@ import (
 	"gateway-microcontroller/internal/middleware"
 	"gateway-microcontroller/internal/service"
 	"log"
+	"time"
 
+	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/gin-gonic/gin"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
@@ -25,12 +27,65 @@ import (
 func main() {
 	cfg := config.Load()
 
-	detectorClient := client.NewHTTPDetectorClient(cfg.DetectorServiceURL)
-	eventService := service.NewEventService(detectorClient)
+	detectorClient := client.NewHTTPDetectorClient(cfg.DetectiveManagerURL)
+	sessionService := service.NewSessionService(cfg.SessionTTL)
+	mediaExtractor := service.NewFFmpegMediaExtractor(cfg.FFmpegPath)
+	eventService := service.NewGatewayEventService(
+		detectorClient,
+		sessionService,
+		mediaExtractor,
+		service.EventServiceConfig{
+			AudioChunkDuration:  cfg.AudioChunkDuration,
+			VideoChunkDuration:  cfg.VideoChunkDuration,
+			AudioFormat:         cfg.AudioFormat,
+			MediaRequestTimeout: cfg.MediaRequestTimeout,
+			MediaChunkBatchSize: cfg.MediaChunkBatchSize,
+			DebugMedia: service.NewDebugMediaWriter(
+				cfg.DebugMediaEnabled,
+				cfg.DebugMediaDir,
+				cfg.DebugMediaMaxFiles,
+			),
+		},
+	)
+	defer eventService.Close()
+
 	eventHandler := handler.NewEventHandler(eventService)
 
 	deviceService := service.NewDeviceService(detectorClient)
 	deviceHandler := handler.NewDeviceHandler(deviceService)
+
+	var mqttClient mqtt.Client
+	if cfg.MQTTEnabled {
+		options := mqtt.NewClientOptions().
+			AddBroker(cfg.MQTTBrokerURL).
+			SetClientID(cfg.MQTTClientID).
+			SetAutoReconnect(true).
+			SetConnectRetry(true).
+			SetConnectRetryInterval(5 * time.Second).
+			SetOnConnectHandler(func(connectedClient mqtt.Client) {
+				if err := eventHandler.RegisterMQTTSubscriptions(connectedClient); err != nil {
+					log.Printf("failed to register MQTT subscriptions: %v", err)
+				}
+			}).
+			SetConnectionLostHandler(func(_ mqtt.Client, err error) {
+				log.Printf("MQTT connection lost: %v", err)
+			})
+		if cfg.MQTTUsername != "" {
+			options.SetUsername(cfg.MQTTUsername)
+			options.SetPassword(cfg.MQTTPassword)
+		}
+
+		mqttClient = mqtt.NewClient(options)
+		connectToken := mqttClient.Connect()
+		if !connectToken.WaitTimeout(30 * time.Second) {
+			log.Fatal("timed out while connecting to MQTT broker")
+		}
+		if err := connectToken.Error(); err != nil {
+			log.Fatalf("failed to connect to MQTT broker: %v", err)
+		}
+		eventService.SetDeviceCommander(client.NewMQTTInstructionPublisher(mqttClient, handler.TopicDoorbellAIResponse))
+		defer mqttClient.Disconnect(250)
+	}
 
 	router := gin.Default()
 
