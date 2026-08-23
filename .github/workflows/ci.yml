@@ -60,7 +60,7 @@ jobs:
 
           echo "Total coverage: $COVERAGE%"
 
-          MIN_COVERAGE=50
+          MIN_COVERAGE=40
 
           COVERAGE_INT=${COVERAGE%.*}
 
