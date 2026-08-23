@@ -19,7 +19,7 @@ import (
 	"gateway-microcontroller/internal/util"
 )
 
-const orchestratorEventsPath = "/api/detective-manager/v1/orchestrator/events"
+const orchestratorEventsPath = "/v1/orchestrator/events"
 
 type HTTPDetectorClient struct {
 	baseURL    string
