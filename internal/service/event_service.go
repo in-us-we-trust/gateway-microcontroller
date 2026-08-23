@@ -34,14 +34,14 @@ type EventServiceConfig struct {
 }
 
 type eventService struct {
-	detector    client.DetectorClient
-	sessions    SessionRegistry
-	extractor   MediaExtractor
-	config      EventServiceConfig
-	workers     sync.WaitGroup
-	commanderM  sync.RWMutex
-	commander   client.DeviceCommander
-	debugMedia  DebugMediaWriter
+	detector   client.DetectorClient
+	sessions   SessionRegistry
+	extractor  MediaExtractor
+	config     EventServiceConfig
+	workers    sync.WaitGroup
+	commanderM sync.RWMutex
+	commander  client.DeviceCommander
+	debugMedia DebugMediaWriter
 }
 
 func NewEventService(detector client.DetectorClient) EventService {
