@@ -31,6 +31,7 @@ type EventServiceConfig struct {
 	MediaRequestTimeout time.Duration
 	MediaChunkBatchSize int
 	DebugMedia          DebugMediaWriter
+	RTSPBase            string
 }
 
 type eventService struct {
@@ -75,6 +76,10 @@ func NewGatewayEventService(
 	if config.MediaChunkBatchSize <= 0 {
 		config.MediaChunkBatchSize = 1
 	}
+	config.RTSPBase = strings.TrimRight(strings.TrimSpace(config.RTSPBase), "/")
+	if config.RTSPBase == "" {
+		config.RTSPBase = defaultRTSPBase
+	}
 	debugMedia := config.DebugMedia
 	if debugMedia == nil {
 		debugMedia = NewDebugMediaWriter(false, "", 0)
@@ -99,16 +104,16 @@ func (s *eventService) ProcessEvent(ctx context.Context, req *domain.EventReques
 }
 
 func (s *eventService) HandleDoorbellPress(_ context.Context, event domain.DoorbellPressEvent) error {
-	if strings.TrimSpace(event.EventID) == "" {
+	event.EventID = strings.TrimSpace(event.EventID)
+	event.DeviceID = strings.TrimSpace(event.DeviceID)
+	if event.EventID == "" {
 		return fmt.Errorf("doorbell press event ID is required")
 	}
-	if strings.TrimSpace(event.DeviceID) == "" {
+	if event.DeviceID == "" {
 		return fmt.Errorf("doorbell press device ID is required")
 	}
-	if strings.TrimSpace(event.RTSPURL) == "" {
-		return fmt.Errorf("doorbell press RTSP URL is required")
-	}
-	if err := validateRTSPURL(event.RTSPURL); err != nil {
+	rtspURL, err := BuildDoorbellRTSPURL(s.config.RTSPBase, event.DeviceID, event.EventID)
+	if err != nil {
 		return err
 	}
 	if s.config.AudioFormat != "mp3" && s.config.AudioFormat != "wav" {
@@ -118,7 +123,8 @@ func (s *eventService) HandleDoorbellPress(_ context.Context, event domain.Doorb
 		return nil
 	}
 
-	session, sessionCtx := s.sessions.StartSession(event.DeviceID, event.EventID, event.RTSPURL)
+	session, sessionCtx := s.sessions.StartSession(event.DeviceID, event.EventID, rtspURL)
+	log.Printf("started session device=%s trackId=%s rtsp=%s", session.DeviceID, session.TrackID, session.RTSPURL)
 
 	if err := s.dispatchPressSnapshot(sessionCtx, session, event); err != nil && sessionCtx.Err() == nil {
 		log.Printf("failed to dispatch doorbell snapshot for device %s: %v", session.DeviceID, err)
@@ -140,16 +146,23 @@ func (s *eventService) SetDeviceCommander(commander client.DeviceCommander) {
 }
 
 func (s *eventService) HandleStreamEnd(_ context.Context, event domain.StreamEndEvent) error {
-	if strings.TrimSpace(event.DeviceID) == "" {
+	deviceID := strings.TrimSpace(event.DeviceID)
+	if deviceID == "" {
 		return fmt.Errorf("stream end device ID is required")
 	}
 
-	s.sessions.EndSession(event.DeviceID, event.TrackID)
+	trackID := strings.TrimSpace(event.TrackID)
+	if trackID == "" {
+		trackID = strings.TrimSpace(event.EventID)
+	}
+
+	s.sessions.EndSession(deviceID, trackID)
 	return nil
 }
 
 func (s *eventService) HandleCapture(ctx context.Context, mediaType domain.MediaType, event domain.CaptureEvent) error {
-	if strings.TrimSpace(event.DeviceID) == "" {
+	deviceID := strings.TrimSpace(event.DeviceID)
+	if deviceID == "" {
 		return fmt.Errorf("device ID is required")
 	}
 
@@ -157,32 +170,39 @@ func (s *eventService) HandleCapture(ctx context.Context, mediaType domain.Media
 	if trackID == "" {
 		trackID = strings.TrimSpace(event.EventID)
 	}
-	rtspURL := strings.TrimSpace(event.RTSPURL)
-	if session, ok := s.sessions.GetActiveSession(event.DeviceID); ok {
+
+	var rtspURL string
+	if session, ok := s.sessions.GetActiveSession(deviceID); ok {
 		if trackID == "" {
 			trackID = session.TrackID
 		}
-		if rtspURL == "" {
+		if trackID == session.TrackID {
 			rtspURL = session.RTSPURL
 		}
 	}
 	if trackID == "" {
 		return fmt.Errorf("track ID is required when no active session exists")
 	}
-	if err := validateRTSPURL(rtspURL); err != nil {
-		return err
+	if rtspURL == "" {
+		built, err := BuildDoorbellRTSPURL(s.config.RTSPBase, deviceID, trackID)
+		if err != nil {
+			return err
+		}
+		rtspURL = built
 	}
 
 	session := domain.SessionState{
 		TrackID:  trackID,
-		DeviceID: event.DeviceID,
+		DeviceID: deviceID,
 		RTSPURL:  rtspURL,
 	}
 
 	switch mediaType {
 	case domain.MediaTypeImage:
 		extractCtx, cancelExtract := context.WithTimeout(ctx, s.config.MediaRequestTimeout)
+		extractStart := time.Now()
 		image, err := s.extractor.ExtractImage(extractCtx, session.RTSPURL)
+		extractDuration := time.Since(extractStart)
 		cancelExtract()
 		if err != nil {
 			return fmt.Errorf("extract image: %w", err)
@@ -190,23 +210,26 @@ func (s *eventService) HandleCapture(ctx context.Context, mediaType domain.Media
 		requestCtx, cancelRequest := context.WithTimeout(ctx, s.config.MediaRequestTimeout)
 		defer cancelRequest()
 		return s.dispatchPreparedMedia(requestCtx, domain.MediaEventRequest{
-			TrackID:     session.TrackID,
-			DeviceID:    session.DeviceID,
-			MediaType:   domain.MediaTypeImage,
-			FileName:    "snapshot.jpeg",
-			Buffer:      image,
-			StartedAt:   session.StartedAt,
-			ChunkNumber: 1,
+			TrackID:         session.TrackID,
+			DeviceID:        session.DeviceID,
+			MediaType:       domain.MediaTypeImage,
+			FileName:        "snapshot.jpeg",
+			Buffer:          image,
+			StartedAt:       session.StartedAt,
+			ChunkNumber:     1,
+			ExtractDuration: extractDuration,
 		})
 	case domain.MediaTypeAudio:
 		extractTimeout := s.config.AudioChunkDuration + s.config.MediaRequestTimeout
 		extractCtx, cancelExtract := context.WithTimeout(ctx, extractTimeout)
+		extractStart := time.Now()
 		audio, err := s.extractor.ExtractAudioChunk(
 			extractCtx,
 			session.RTSPURL,
 			s.config.AudioChunkDuration,
 			s.config.AudioFormat,
 		)
+		extractDuration := time.Since(extractStart)
 		cancelExtract()
 		if err != nil {
 			return fmt.Errorf("extract audio: %w", err)
@@ -214,13 +237,14 @@ func (s *eventService) HandleCapture(ctx context.Context, mediaType domain.Media
 		requestCtx, cancelRequest := context.WithTimeout(ctx, s.config.MediaRequestTimeout)
 		defer cancelRequest()
 		return s.dispatchPreparedMedia(requestCtx, domain.MediaEventRequest{
-			TrackID:     session.TrackID,
-			DeviceID:    session.DeviceID,
-			MediaType:   domain.MediaTypeAudio,
-			FileName:    "chunk_ondemand." + s.config.AudioFormat,
-			Buffer:      audio,
-			StartedAt:   session.StartedAt,
-			ChunkNumber: 1,
+			TrackID:         session.TrackID,
+			DeviceID:        session.DeviceID,
+			MediaType:       domain.MediaTypeAudio,
+			FileName:        "chunk_ondemand." + s.config.AudioFormat,
+			Buffer:          audio,
+			StartedAt:       session.StartedAt,
+			ChunkNumber:     1,
+			ExtractDuration: extractDuration,
 		})
 	default:
 		return fmt.Errorf("unsupported capture media type %q", mediaType)
@@ -252,6 +276,7 @@ func (s *eventService) HandleDeviceMedia(ctx context.Context, mediaType domain.M
 
 	fileName := strings.TrimSpace(event.FileName)
 	orchestratorType := mediaType
+	extractDuration := time.Duration(0)
 	switch mediaType {
 	case domain.MediaTypeImage:
 		if fileName == "" {
@@ -265,7 +290,9 @@ func (s *eventService) HandleDeviceMedia(ctx context.Context, mediaType domain.M
 		if fileName == "" {
 			fileName = "clip.mp4"
 		}
+		extractStart := time.Now()
 		image, err := s.extractor.ExtractImageFromFile(ctx, fileName, buffer)
+		extractDuration = time.Since(extractStart)
 		if err != nil {
 			return fmt.Errorf("extract image from video: %w", err)
 		}
@@ -277,11 +304,12 @@ func (s *eventService) HandleDeviceMedia(ctx context.Context, mediaType domain.M
 	}
 
 	return s.dispatchPreparedMedia(ctx, domain.MediaEventRequest{
-		TrackID:   trackID,
-		DeviceID:  event.DeviceID,
-		MediaType: orchestratorType,
-		FileName:  fileName,
-		Buffer:    buffer,
+		TrackID:         trackID,
+		DeviceID:        event.DeviceID,
+		MediaType:       orchestratorType,
+		FileName:        fileName,
+		Buffer:          buffer,
+		ExtractDuration: extractDuration,
 	})
 }
 
@@ -291,6 +319,7 @@ func (s *eventService) Close() {
 }
 
 func (s *eventService) dispatchPressSnapshot(ctx context.Context, session domain.SessionState, event domain.DoorbellPressEvent) error {
+	extractStart := time.Now()
 	image, err := decodePressImage(event.Image)
 	if err != nil {
 		log.Printf("press snapshot missing or invalid for device %s, falling back to RTSP: %v", session.DeviceID, err)
@@ -301,6 +330,7 @@ func (s *eventService) dispatchPressSnapshot(ctx context.Context, session domain
 			return fmt.Errorf("extract image: %w", err)
 		}
 	}
+	extractDuration := time.Since(extractStart)
 	if !s.sessionIsCurrent(session) {
 		return context.Canceled
 	}
@@ -309,51 +339,58 @@ func (s *eventService) dispatchPressSnapshot(ctx context.Context, session domain
 	defer cancelRequest()
 
 	return s.dispatchPreparedMedia(requestCtx, domain.MediaEventRequest{
-		TrackID:     session.TrackID,
-		DeviceID:    session.DeviceID,
-		MediaType:   domain.MediaTypeImage,
-		FileName:    "snapshot.jpeg",
-		Buffer:      image,
-		StartedAt:   session.StartedAt,
-		ChunkNumber: 1,
+		TrackID:         session.TrackID,
+		DeviceID:        session.DeviceID,
+		MediaType:       domain.MediaTypeImage,
+		FileName:        "snapshot.jpeg",
+		Buffer:          image,
+		StartedAt:       session.StartedAt,
+		ChunkNumber:     1,
+		ExtractDuration: extractDuration,
 	})
 }
 
 func (s *eventService) dispatchRTSPChunks(ctx context.Context, session domain.SessionState) {
-	videoNumber := 1
-	audioNumber := 1
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		s.dispatchMediaLoop(ctx, session, "video", s.config.VideoChunkDuration, func(extractCtx context.Context) ([]byte, string, domain.MediaType, error) {
+			video, err := s.extractor.ExtractVideoChunk(extractCtx, session.RTSPURL, s.config.VideoChunkDuration)
+			return video, "mp4", domain.MediaTypeVideo, err
+		})
+	}()
+	go func() {
+		defer wg.Done()
+		s.dispatchMediaLoop(ctx, session, "audio", s.config.AudioChunkDuration, func(extractCtx context.Context) ([]byte, string, domain.MediaType, error) {
+			audio, err := s.extractor.ExtractAudioChunk(
+				extractCtx,
+				session.RTSPURL,
+				s.config.AudioChunkDuration,
+				s.config.AudioFormat,
+			)
+			return audio, s.config.AudioFormat, domain.MediaTypeAudio, err
+		})
+	}()
+	wg.Wait()
+}
 
+func (s *eventService) dispatchMediaLoop(
+	ctx context.Context,
+	session domain.SessionState,
+	label string,
+	chunkDuration time.Duration,
+	extract func(context.Context) ([]byte, string, domain.MediaType, error),
+) {
+	chunkNumber := 1
 	for {
-		if !s.sessionIsCurrent(session) {
+		if ctx.Err() != nil || !s.sessionIsCurrent(session) {
 			return
 		}
-
-		for i := 0; i < s.config.MediaChunkBatchSize; i++ {
-			ok := s.extractAndDispatchChunk(ctx, session, "video", s.config.VideoChunkDuration, videoNumber, func(extractCtx context.Context) ([]byte, string, domain.MediaType, error) {
-				video, err := s.extractor.ExtractVideoChunk(extractCtx, session.RTSPURL, s.config.VideoChunkDuration)
-				return video, "mp4", domain.MediaTypeVideo, err
-			})
-			if !ok {
-				return
-			}
-			videoNumber++
+		if !s.extractAndDispatchChunk(ctx, session, label, chunkDuration, chunkNumber, extract) {
+			return
 		}
-
-		for i := 0; i < s.config.MediaChunkBatchSize; i++ {
-			ok := s.extractAndDispatchChunk(ctx, session, "audio", s.config.AudioChunkDuration, audioNumber, func(extractCtx context.Context) ([]byte, string, domain.MediaType, error) {
-				audio, err := s.extractor.ExtractAudioChunk(
-					extractCtx,
-					session.RTSPURL,
-					s.config.AudioChunkDuration,
-					s.config.AudioFormat,
-				)
-				return audio, s.config.AudioFormat, domain.MediaTypeAudio, err
-			})
-			if !ok {
-				return
-			}
-			audioNumber++
-		}
+		chunkNumber++
 	}
 }
 
@@ -372,7 +409,9 @@ func (s *eventService) extractAndDispatchChunk(
 
 		extractTimeout := chunkDuration + s.config.MediaRequestTimeout
 		extractCtx, cancelExtract := context.WithTimeout(ctx, extractTimeout)
+		extractStart := time.Now()
 		data, ext, mediaType, err := extract(extractCtx)
+		extractDuration := time.Since(extractStart)
 		cancelExtract()
 		if err != nil {
 			if ctx.Err() != nil {
@@ -391,13 +430,14 @@ func (s *eventService) extractAndDispatchChunk(
 
 		requestCtx, cancelRequest := context.WithTimeout(ctx, s.config.MediaRequestTimeout)
 		err = s.dispatchPreparedMedia(requestCtx, domain.MediaEventRequest{
-			TrackID:     session.TrackID,
-			DeviceID:    session.DeviceID,
-			MediaType:   mediaType,
-			FileName:    fmt.Sprintf("chunk_%03d.%s", chunkNumber, ext),
-			Buffer:      data,
-			StartedAt:   session.StartedAt,
-			ChunkNumber: chunkNumber,
+			TrackID:         session.TrackID,
+			DeviceID:        session.DeviceID,
+			MediaType:       mediaType,
+			FileName:        fmt.Sprintf("chunk_%03d.%s", chunkNumber, ext),
+			Buffer:          data,
+			StartedAt:       session.StartedAt,
+			ChunkNumber:     chunkNumber,
+			ExtractDuration: extractDuration,
 		})
 		cancelRequest()
 		if err != nil && ctx.Err() == nil {
@@ -417,12 +457,12 @@ func (s *eventService) dispatchPreparedMedia(ctx context.Context, req domain.Med
 		req.FileName = "payload.bin"
 	}
 
+	postStart := time.Now()
 	data, err := s.detector.SendMediaEvent(ctx, req)
+	req.PostDuration = time.Since(postStart)
 	if err != nil {
 		return err
 	}
-
-	s.debugMedia.Write(req)
 
 	instructionTrackID := req.TrackID
 	if data != nil && data.TrackID != "" {
@@ -442,6 +482,8 @@ func (s *eventService) dispatchPreparedMedia(ctx context.Context, req domain.Med
 
 	instruction := domain.InstructionFromOrchestrator(req.DeviceID, payload)
 	instruction.TrackID = req.TrackID
+	req.Action = instruction.Action
+	s.debugMedia.Write(req)
 	s.publishInstruction(instruction)
 	if instruction.Action == domain.DeviceActionStopDanger {
 		s.sessions.EndSession(req.DeviceID, req.TrackID)
@@ -504,10 +546,39 @@ func decodePressImage(raw string) ([]byte, error) {
 	return image, nil
 }
 
+const (
+	defaultRTSPBase = "rtsp://localhost:8554"
+	doorbellRTSPSeg = "doorbell"
+)
+
+func BuildDoorbellRTSPURL(base, deviceID, trackID string) (string, error) {
+	base = strings.TrimRight(strings.TrimSpace(base), "/")
+	deviceID = strings.TrimSpace(deviceID)
+	trackID = strings.TrimSpace(trackID)
+	if base == "" {
+		return "", fmt.Errorf("RTSP base URL is required")
+	}
+	if deviceID == "" {
+		return "", fmt.Errorf("device ID is required to build RTSP URL")
+	}
+	if trackID == "" {
+		return "", fmt.Errorf("track ID is required to build RTSP URL")
+	}
+
+	rtspURL, err := url.JoinPath(base, deviceID, doorbellRTSPSeg, trackID)
+	if err != nil {
+		return "", fmt.Errorf("build RTSP URL: %w", err)
+	}
+	if err := validateRTSPURL(rtspURL); err != nil {
+		return "", err
+	}
+	return rtspURL, nil
+}
+
 func validateRTSPURL(rawURL string) error {
 	parsed, err := url.ParseRequestURI(rawURL)
 	if err != nil || parsed.Host == "" || (parsed.Scheme != "rtsp" && parsed.Scheme != "rtsps") {
-		return fmt.Errorf("doorbell press RTSP URL must use the rtsp or rtsps scheme")
+		return fmt.Errorf("RTSP URL must use the rtsp or rtsps scheme")
 	}
 	return nil
 }

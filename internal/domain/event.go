@@ -24,7 +24,7 @@ type DoorbellPressEvent struct {
 	Timestamp         int64   `json:"timestamp"`
 	Event             string  `json:"event,omitempty"`
 	Image             string  `json:"image,omitempty"`
-	RTSPURL           string  `json:"rtspUrl"`
+	RTSPURL           string  `json:"rtspUrl,omitempty"`
 	BatteryPercentage float64 `json:"batteryPercentage"`
 }
 
@@ -43,13 +43,16 @@ type StreamEndEvent struct {
 }
 
 type MediaEventRequest struct {
-	TrackID     string
-	DeviceID    string
-	MediaType   MediaType
-	FileName    string
-	Buffer      []byte
-	StartedAt   time.Time
-	ChunkNumber int
+	TrackID         string
+	DeviceID        string
+	MediaType       MediaType
+	FileName        string
+	Buffer          []byte
+	StartedAt       time.Time
+	ChunkNumber     int
+	ExtractDuration time.Duration
+	PostDuration    time.Duration
+	Action          string
 }
 
 type DeviceMediaEvent struct {

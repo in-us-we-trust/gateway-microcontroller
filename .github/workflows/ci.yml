@@ -54,13 +54,13 @@ jobs:
           PORT: 8080
           DETECTIVE_MANAGER_URL: http://localhost:8087/api/detective-manager
         run: |
-          go test ./... -coverprofile=coverage.out
+          go test ./internal/... ./pkg/... ./tests/integration/... -coverprofile=coverage.out
 
           COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print substr($3, 1, length($3)-1)}')
 
           echo "Total coverage: $COVERAGE%"
 
-          MIN_COVERAGE=40
+          MIN_COVERAGE=80
 
           COVERAGE_INT=${COVERAGE%.*}
 

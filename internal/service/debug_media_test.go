@@ -1,6 +1,8 @@
 package service
 
 import (
+	"bytes"
+	"log"
 	"os"
 	"path/filepath"
 	"testing"
@@ -12,22 +14,41 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNewDebugMediaWriter_DisabledDoesNotWrite(t *testing.T) {
-	t.Parallel()
+func TestNewDebugMediaWriter_DisabledLogsMetadataWithoutWritingFiles(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
 
 	dir := t.TempDir()
 	writer := NewDebugMediaWriter(false, dir, 10)
+	payload := bytes.Repeat([]byte{0xff, 0xd8}, 64)
 	writer.Write(domain.MediaEventRequest{
-		TrackID:   "123",
-		MediaType: domain.MediaTypeImage,
-		FileName:  "snapshot.jpeg",
-		Buffer:    []byte("jpeg"),
-		StartedAt: time.Now(),
+		TrackID:         "track-1",
+		DeviceID:        "device-a",
+		MediaType:       domain.MediaTypeVideo,
+		FileName:        "chunk_002.mp4",
+		Buffer:          payload,
+		ChunkNumber:     2,
+		ExtractDuration: 51 * time.Millisecond,
+		PostDuration:    120 * time.Millisecond,
+		Action:          domain.DeviceActionContinue,
 	})
 
 	entries, err := os.ReadDir(dir)
 	require.NoError(t, err)
 	assert.Empty(t, entries)
+
+	logged := buf.String()
+	assert.Contains(t, logged, "trackId=track-1")
+	assert.Contains(t, logged, "deviceId=device-a")
+	assert.Contains(t, logged, "mediaType=VIDEO")
+	assert.Contains(t, logged, "fileName=chunk_002.mp4")
+	assert.Contains(t, logged, "bytes=128")
+	assert.Contains(t, logged, "chunkNumber=2")
+	assert.Contains(t, logged, "extractMs=51")
+	assert.Contains(t, logged, "postMs=120")
+	assert.Contains(t, logged, "action=CONTINUE")
+	assert.NotContains(t, logged, string(payload))
 }
 
 func TestNewDebugMediaWriter_EnforcesMaxFiles(t *testing.T) {

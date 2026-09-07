@@ -17,19 +17,6 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const (
-	TopicDoorbellStatus       = "home/doorbell/status"
-	TopicDoorbellPress        = "home/doorbell/events/press"
-	TopicDoorbellStreamEnd    = "home/doorbell/events/stream_end"
-	TopicDoorbellImage        = "home/doorbell/events/image"
-	TopicDoorbellAudio        = "home/doorbell/events/audio"
-	TopicDoorbellVideo        = "home/doorbell/events/video"
-	TopicDoorbellCaptureImage = "home/doorbell/events/capture_image"
-	TopicDoorbellCaptureAudio = "home/doorbell/events/capture_audio"
-	TopicDoorbellTelemetry    = "home/doorbell/telemetry"
-	TopicDoorbellAIResponse   = "home/doorbell/events/ia_response"
-)
-
 type EventHandler struct {
 	service service.EventService
 }
@@ -39,61 +26,68 @@ func NewEventHandler(svc service.EventService) *EventHandler {
 }
 
 func (h *EventHandler) RegisterMQTTSubscriptions(client mqtt.Client) error {
-	subscriptions := []struct {
-		topic   string
-		handler mqtt.MessageHandler
-	}{
-		{topic: TopicDoorbellPress, handler: h.handleDoorbellPressMessage},
-		{topic: TopicDoorbellStreamEnd, handler: h.handleStreamEndMessage},
-		{topic: TopicDoorbellCaptureImage, handler: h.handleCapture(domain.MediaTypeImage)},
-		{topic: TopicDoorbellCaptureAudio, handler: h.handleCapture(domain.MediaTypeAudio)},
+	token := client.Subscribe(domain.MQTTHomeEventsWildcard, 1, h.handleHomeEventMessage)
+	if !token.WaitTimeout(10 * time.Second) {
+		return fmt.Errorf("subscribe to MQTT topic %s: timeout", domain.MQTTHomeEventsWildcard)
 	}
-
-	for _, subscription := range subscriptions {
-		token := client.Subscribe(subscription.topic, 1, subscription.handler)
-		if !token.WaitTimeout(10 * time.Second) {
-			return fmt.Errorf("subscribe to MQTT topic %s: timeout", subscription.topic)
-		}
-		if err := token.Error(); err != nil {
-			return fmt.Errorf("subscribe to MQTT topic %s: %w", subscription.topic, err)
-		}
-		log.Printf("subscribed to MQTT topic %s with QoS 1", subscription.topic)
+	if err := token.Error(); err != nil {
+		return fmt.Errorf("subscribe to MQTT topic %s: %w", domain.MQTTHomeEventsWildcard, err)
 	}
-
+	log.Printf("subscribed to MQTT topic %s with QoS 1", domain.MQTTHomeEventsWildcard)
 	return nil
 }
 
-func (h *EventHandler) handleDoorbellPressMessage(_ mqtt.Client, message mqtt.Message) {
+func (h *EventHandler) handleHomeEventMessage(_ mqtt.Client, message mqtt.Message) {
 	rawPayload := string(message.Payload())
 	loggedPayload := rawPayload
 	if len(loggedPayload) > 240 {
 		loggedPayload = loggedPayload[:120] + "... (" + fmt.Sprintf("%d", len(rawPayload)) + " chars)"
 	}
 
-	log.Printf(
-		"MQTT RECEIVED topic=%s payload=%q",
-		message.Topic(),
-		loggedPayload,
-	)
-
-	var event domain.DoorbellPressEvent
-	if err := json.Unmarshal(message.Payload(), &event); err != nil {
-		log.Printf(
-			"MQTT INVALID JSON error=%v payload=%q",
-			err,
-			rawPayload,
-		)
+	parsed, err := domain.ParseHomeEventTopic(message.Topic())
+	if err != nil {
+		log.Printf("discarding MQTT message topic=%s error=%v", message.Topic(), err)
 		return
 	}
 
+	switch parsed.Action {
+	case domain.MQTTActionPress:
+		h.handleDoorbellPressMessage(message, parsed, loggedPayload)
+	case domain.MQTTActionStreamEnd:
+		h.handleStreamEndMessage(message, parsed, rawPayload)
+	case domain.MQTTActionCaptureImage:
+		h.handleCaptureMessage(domain.MediaTypeImage, message, parsed, rawPayload)
+	case domain.MQTTActionCaptureAudio:
+		h.handleCaptureMessage(domain.MediaTypeAudio, message, parsed, rawPayload)
+	case domain.MQTTActionAIResponse:
+		return
+	default:
+		log.Printf("ignoring MQTT topic=%s action=%s", message.Topic(), parsed.Action)
+	}
+}
+
+func (h *EventHandler) handleDoorbellPressMessage(message mqtt.Message, topic domain.HomeEventTopic, loggedPayload string) {
+	log.Printf("MQTT RECEIVED topic=%s payload=%q", message.Topic(), loggedPayload)
+
+	var event domain.DoorbellPressEvent
+	if err := json.Unmarshal(message.Payload(), &event); err != nil {
+		log.Printf("MQTT INVALID JSON error=%v payload=%q", err, string(message.Payload()))
+		return
+	}
+	if err := domain.BindTopicIdentity(topic, event.DeviceID, "", event.EventID); err != nil {
+		log.Printf("discarding MQTT payload topic=%s error=%v", message.Topic(), err)
+		return
+	}
+	event.DeviceID = topic.DeviceID
+	event.EventID = topic.TrackID
+
 	log.Printf(
-		"MQTT JSON OK eventId=%s deviceId=%s event=%s timestamp=%d imageBytes=%d rtspUrl=%s",
+		"MQTT JSON OK eventId=%s deviceId=%s event=%s timestamp=%d imageBytes=%d",
 		event.EventID,
 		event.DeviceID,
 		event.Event,
 		event.Timestamp,
 		len(event.Image),
-		event.RTSPURL,
 	)
 
 	if err := h.service.HandleDoorbellPress(context.Background(), event); err != nil {
@@ -101,9 +95,7 @@ func (h *EventHandler) handleDoorbellPressMessage(_ mqtt.Client, message mqtt.Me
 	}
 }
 
-func (h *EventHandler) handleStreamEndMessage(_ mqtt.Client, message mqtt.Message) {
-	rawPayload := string(message.Payload())
-
+func (h *EventHandler) handleStreamEndMessage(message mqtt.Message, topic domain.HomeEventTopic, rawPayload string) {
 	log.Printf(
 		"received MQTT message topic=%s qos=%d retained=%t payload=%q",
 		message.Topic(),
@@ -122,6 +114,12 @@ func (h *EventHandler) handleStreamEndMessage(_ mqtt.Client, message mqtt.Messag
 		)
 		return
 	}
+	if err := domain.BindTopicIdentity(topic, event.DeviceID, event.TrackID, event.EventID); err != nil {
+		log.Printf("discarding MQTT payload topic=%s error=%v", message.Topic(), err)
+		return
+	}
+	event.DeviceID = topic.DeviceID
+	event.TrackID = topic.TrackID
 
 	if err := h.service.HandleStreamEnd(context.Background(), event); err != nil {
 		log.Printf(
@@ -135,20 +133,23 @@ func (h *EventHandler) handleStreamEndMessage(_ mqtt.Client, message mqtt.Messag
 	log.Printf("successfully processed stream_end event")
 }
 
-func (h *EventHandler) handleCapture(mediaType domain.MediaType) mqtt.MessageHandler {
-	return func(_ mqtt.Client, message mqtt.Message) {
-		rawPayload := string(message.Payload())
-		log.Printf("MQTT RECEIVED topic=%s payload=%q", message.Topic(), rawPayload)
+func (h *EventHandler) handleCaptureMessage(mediaType domain.MediaType, message mqtt.Message, topic domain.HomeEventTopic, rawPayload string) {
+	log.Printf("MQTT RECEIVED topic=%s payload=%q", message.Topic(), rawPayload)
 
-		var event domain.CaptureEvent
-		if err := json.Unmarshal(message.Payload(), &event); err != nil {
-			log.Printf("MQTT INVALID JSON topic=%s error=%v payload=%q", message.Topic(), err, rawPayload)
-			return
-		}
+	var event domain.CaptureEvent
+	if err := json.Unmarshal(message.Payload(), &event); err != nil {
+		log.Printf("MQTT INVALID JSON topic=%s error=%v payload=%q", message.Topic(), err, rawPayload)
+		return
+	}
+	if err := domain.BindTopicIdentity(topic, event.DeviceID, event.TrackID, event.EventID); err != nil {
+		log.Printf("discarding MQTT payload topic=%s error=%v", message.Topic(), err)
+		return
+	}
+	event.DeviceID = topic.DeviceID
+	event.TrackID = topic.TrackID
 
-		if err := h.service.HandleCapture(context.Background(), mediaType, event); err != nil {
-			log.Printf("MQTT PROCESSING ERROR topic=%s error=%v", message.Topic(), err)
-		}
+	if err := h.service.HandleCapture(context.Background(), mediaType, event); err != nil {
+		log.Printf("MQTT PROCESSING ERROR topic=%s error=%v", message.Topic(), err)
 	}
 }
 

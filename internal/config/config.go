@@ -29,6 +29,7 @@ type Config struct {
 	DebugMediaDir       string
 	DebugMediaEnabled   bool
 	DebugMediaMaxFiles  int
+	RTSPBase            string
 }
 
 func Load() Config {
@@ -55,6 +56,7 @@ func Load() Config {
 		DebugMediaDir:       getEnv("DEBUG_MEDIA_DIR", ""),
 		DebugMediaEnabled:   getEnvBoolExplicit("DEBUG_MEDIA_ENABLED"),
 		DebugMediaMaxFiles:  getEnvInt("DEBUG_MEDIA_MAX_FILES", 0),
+		RTSPBase:            getEnv("RTSP_BASE", "rtsp://localhost:8554"),
 	}
 }
 

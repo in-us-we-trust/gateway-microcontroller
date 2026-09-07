@@ -40,6 +40,7 @@ func main() {
 			AudioFormat:         cfg.AudioFormat,
 			MediaRequestTimeout: cfg.MediaRequestTimeout,
 			MediaChunkBatchSize: cfg.MediaChunkBatchSize,
+			RTSPBase:            cfg.RTSPBase,
 			DebugMedia: service.NewDebugMediaWriter(
 				cfg.DebugMediaEnabled,
 				cfg.DebugMediaDir,
@@ -83,7 +84,7 @@ func main() {
 		if err := connectToken.Error(); err != nil {
 			log.Fatalf("failed to connect to MQTT broker: %v", err)
 		}
-		eventService.SetDeviceCommander(client.NewMQTTInstructionPublisher(mqttClient, handler.TopicDoorbellAIResponse))
+		eventService.SetDeviceCommander(client.NewMQTTInstructionPublisher(mqttClient))
 		defer mqttClient.Disconnect(250)
 	}
 

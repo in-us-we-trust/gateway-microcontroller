@@ -30,7 +30,7 @@ func NewHTTPDetectorClient(baseURL string) *HTTPDetectorClient {
 	return &HTTPDetectorClient{
 		baseURL: baseURL,
 		httpClient: &http.Client{
-			Timeout:   60 * time.Second,
+			Timeout:   120 * time.Second,
 			Transport: &loggingRoundTripper{next: http.DefaultTransport},
 		},
 	}

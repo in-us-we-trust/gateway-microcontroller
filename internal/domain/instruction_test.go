@@ -42,3 +42,40 @@ func TestInstructionFromOrchestrator_DefaultsToContinue(t *testing.T) {
 		t.Fatalf("severity=%s", instruction.Severity)
 	}
 }
+
+func TestInstructionFromOrchestrator_DefaultMessageWhenAssessmentsEmpty(t *testing.T) {
+	instruction := InstructionFromOrchestrator("device-1", OrchestratorEventData{
+		TrackID:   "track-1",
+		ChunkType: "IMAGE",
+	})
+	if instruction.Action != DeviceActionContinue {
+		t.Fatalf("action=%s", instruction.Action)
+	}
+	if instruction.Message != "No blocking alerts." {
+		t.Fatalf("message=%s", instruction.Message)
+	}
+
+	stop := DeviceActionStopDanger
+	danger := InstructionFromOrchestrator("device-1", OrchestratorEventData{
+		TrackID:      "track-1",
+		ChunkType:    "AUDIO",
+		FinalVerdict: &stop,
+	})
+	if danger.Message != "Danger detected. Stop the active session." {
+		t.Fatalf("message=%s", danger.Message)
+	}
+}
+
+func TestDetectorError_ErrorIncludesCode(t *testing.T) {
+	err := &DetectorError{Code: ErrCodeDetectorAnalysis, DetectorDetail: "upstream failed"}
+	if err.Error() != "[DTE-001] upstream failed" {
+		t.Fatalf("error=%s", err.Error())
+	}
+}
+
+func TestDevicesControllerError_Error(t *testing.T) {
+	err := &DevicesControllerError{StatusCode: 502, Body: []byte("nope")}
+	if err.Error() != "devices controller error" {
+		t.Fatalf("error=%s", err.Error())
+	}
+}

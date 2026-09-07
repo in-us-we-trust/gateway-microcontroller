@@ -23,11 +23,25 @@ type DebugMediaWriter interface {
 
 type noDebugMediaWriter struct{}
 
-func (noDebugMediaWriter) Write(domain.MediaEventRequest) {}
+func (noDebugMediaWriter) Write(req domain.MediaEventRequest) {
+	log.Printf(
+		"media dispatch trackId=%s deviceId=%s mediaType=%s fileName=%s bytes=%d chunkNumber=%d extractMs=%d postMs=%d action=%s",
+		req.TrackID,
+		req.DeviceID,
+		req.MediaType,
+		req.FileName,
+		len(req.Buffer),
+		req.ChunkNumber,
+		req.ExtractDuration.Milliseconds(),
+		req.PostDuration.Milliseconds(),
+		req.Action,
+	)
+}
 
 func NewDebugMediaWriter(enabled bool, dir string, maxFiles int) DebugMediaWriter {
+	logger := noDebugMediaWriter{}
 	if !enabled {
-		return noDebugMediaWriter{}
+		return logger
 	}
 
 	dir = strings.TrimSpace(dir)
@@ -39,6 +53,7 @@ func NewDebugMediaWriter(enabled bool, dir string, maxFiles int) DebugMediaWrite
 	}
 
 	return &fileDebugMediaWriter{
+		logger:   logger,
 		dir:      dir,
 		maxFiles: maxFiles,
 		chunks:   make(map[string]int),
@@ -46,6 +61,7 @@ func NewDebugMediaWriter(enabled bool, dir string, maxFiles int) DebugMediaWrite
 }
 
 type fileDebugMediaWriter struct {
+	logger   noDebugMediaWriter
 	dir      string
 	maxFiles int
 
@@ -54,6 +70,7 @@ type fileDebugMediaWriter struct {
 }
 
 func (w *fileDebugMediaWriter) Write(req domain.MediaEventRequest) {
+	w.logger.Write(req)
 	if len(req.Buffer) == 0 {
 		return
 	}
