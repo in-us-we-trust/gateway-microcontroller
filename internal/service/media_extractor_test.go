@@ -98,3 +98,25 @@ func TestNewFFmpegMediaExtractor_DefaultsExecutable(t *testing.T) {
 	t.Parallel()
 	assert.Equal(t, "ffmpeg", NewFFmpegMediaExtractor("").executable)
 }
+
+func TestFFmpegMediaExtractor_RTSPSTLSFlags(t *testing.T) {
+	t.Parallel()
+
+	plain := NewFFmpegMediaExtractor("ffmpeg")
+	assert.Equal(t, []string{
+		"-hide_banner", "-loglevel", "error", "-nostdin",
+		"-rtsp_transport", "tcp", "-timeout", "10000000",
+		"-fflags", "nobuffer", "-flags", "low_delay",
+		"-i", "rtsp://camera/live",
+	}, plain.liveRTSPInputArgs("rtsp://camera/live"))
+
+	secure := NewFFmpegMediaExtractor("ffmpeg").WithRTSPTLS("/certs/ca.crt", true)
+	assert.Equal(t, []string{
+		"-hide_banner", "-loglevel", "error", "-nostdin",
+		"-rtsp_transport", "tcp", "-timeout", "10000000",
+		"-fflags", "nobuffer", "-flags", "low_delay",
+		"-ca_file", "/certs/ca.crt",
+		"-tls_verify", "0",
+		"-i", "rtsps://gateway:gw-lab@mediamtx:8322/dev/doorbell/track",
+	}, secure.liveRTSPInputArgs("rtsps://gateway:gw-lab@mediamtx:8322/dev/doorbell/track"))
+}

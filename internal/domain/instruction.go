@@ -2,38 +2,18 @@ package domain
 
 import "strings"
 
-var severityRank = map[string]int{
-	"NORMAL": 1,
-	"LOW":    2,
-	"MEDIUM": 3,
-	"HIGH":   4,
-}
-
 func InstructionFromOrchestrator(deviceID string, data OrchestratorEventData) DeviceInstruction {
-	action := DeviceActionContinue
-	if verdict := strings.TrimSpace(deref(data.FinalVerdict)); verdict != "" {
-		action = verdict
+	action := strings.TrimSpace(data.FinalVerdict)
+	if action == "" {
+		action = DeviceActionContinue
 	}
 
-	severity := strings.TrimSpace(deref(data.FinalSeverity))
-	message := ""
-	bestRank := -1
-	for _, assessment := range data.Assessments {
-		if strings.EqualFold(strings.TrimSpace(assessment.Verdict), DeviceActionStopDanger) {
-			action = DeviceActionStopDanger
-		}
-		rank := severityRank[strings.ToUpper(strings.TrimSpace(assessment.Severity))]
-		if rank >= bestRank && strings.TrimSpace(assessment.Message) != "" {
-			bestRank = rank
-			message = assessment.Message
-			if severity == "" {
-				severity = assessment.Severity
-			}
-		}
-	}
+	severity := strings.TrimSpace(data.FinalSeverity)
 	if severity == "" {
 		severity = "NORMAL"
 	}
+
+	message := strings.TrimSpace(data.Message)
 	if message == "" {
 		message = defaultInstructionMessage(action)
 	}
@@ -46,13 +26,6 @@ func InstructionFromOrchestrator(deviceID string, data OrchestratorEventData) De
 		Severity:  severity,
 		Message:   message,
 	}
-}
-
-func deref(value *string) string {
-	if value == nil {
-		return ""
-	}
-	return *value
 }
 
 func defaultInstructionMessage(action string) string {

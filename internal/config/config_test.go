@@ -20,6 +20,10 @@ func TestLoad_UsesDocumentedDefaultsWithoutEnvFile(t *testing.T) {
 	assert.False(t, cfg.DebugMediaEnabled)
 	assert.Equal(t, "gateway-micro", cfg.MQTTClientID)
 	assert.Equal(t, "tcp://localhost:1883", cfg.MQTTBrokerURL)
+	assert.Equal(t, 8, cfg.PressMaxInflight)
+	assert.Empty(t, cfg.MQTTCACert)
+	assert.False(t, cfg.MQTTTLSInsecure)
+	assert.False(t, cfg.RTSPTLSInsecure)
 }
 
 func TestLoad_OperatorEnvConfiguresRTSPAndSession(t *testing.T) {
@@ -32,6 +36,13 @@ func TestLoad_OperatorEnvConfiguresRTSPAndSession(t *testing.T) {
 	t.Setenv("MEDIA_CHUNK_BATCH_SIZE", "3")
 	t.Setenv("ENABLE_MTLS", "false")
 	t.Setenv("DETECTIVE_MANAGER_URL", "http://dm.example")
+	t.Setenv("MQTT_BROKER_URL", "ssl://mqtt.example:8883")
+	t.Setenv("MQTT_CA_CERT", "/certs/ca.crt")
+	t.Setenv("MQTT_CLIENT_CERT", "/certs/gateway.crt")
+	t.Setenv("MQTT_CLIENT_KEY", "/certs/gateway.key")
+	t.Setenv("MQTT_TLS_INSECURE", "true")
+	t.Setenv("RTSP_CA_CERT", "/certs/ca.crt")
+	t.Setenv("RTSP_TLS_INSECURE", "true")
 
 	cfg := Load()
 	assert.Equal(t, "rtsp://mediamtx:8554", cfg.RTSPBase)
@@ -42,6 +53,13 @@ func TestLoad_OperatorEnvConfiguresRTSPAndSession(t *testing.T) {
 	assert.Equal(t, 3, cfg.MediaChunkBatchSize)
 	assert.False(t, cfg.EnableMTLS)
 	assert.Equal(t, "http://dm.example", cfg.DetectiveManagerURL)
+	assert.Equal(t, "ssl://mqtt.example:8883", cfg.MQTTBrokerURL)
+	assert.Equal(t, "/certs/ca.crt", cfg.MQTTCACert)
+	assert.Equal(t, "/certs/gateway.crt", cfg.MQTTClientCert)
+	assert.Equal(t, "/certs/gateway.key", cfg.MQTTClientKey)
+	assert.True(t, cfg.MQTTTLSInsecure)
+	assert.Equal(t, "/certs/ca.crt", cfg.RTSPCACert)
+	assert.True(t, cfg.RTSPTLSInsecure)
 }
 
 func TestLoad_InvalidEnvKeepsSafeDefaults(t *testing.T) {

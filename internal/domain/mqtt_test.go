@@ -48,19 +48,12 @@ func TestHomeEventTopicPath(t *testing.T) {
 	)
 }
 
-func TestBindTopicIdentity_AllowsEmptyJSONFields(t *testing.T) {
+func TestNewMQTTMessageID_IsUniqueUUID(t *testing.T) {
 	t.Parallel()
 
-	topic := HomeEventTopic{DeviceID: "device-a", TrackID: "track-1", Action: MQTTActionPress}
-	require.NoError(t, BindTopicIdentity(topic, "", "", ""))
-	require.NoError(t, BindTopicIdentity(topic, "device-a", "track-1", "track-1"))
-}
-
-func TestBindTopicIdentity_RejectsMismatch(t *testing.T) {
-	t.Parallel()
-
-	topic := HomeEventTopic{DeviceID: "device-a", TrackID: "track-1", Action: MQTTActionPress}
-	require.Error(t, BindTopicIdentity(topic, "device-b", "", "track-1"))
-	require.Error(t, BindTopicIdentity(topic, "device-a", "", "track-2"))
-	require.Error(t, BindTopicIdentity(topic, "device-a", "track-2", ""))
+	a := NewMQTTMessageID()
+	b := NewMQTTMessageID()
+	assert.NotEmpty(t, a)
+	assert.NotEqual(t, a, b)
+	assert.Equal(t, 36, len(a))
 }

@@ -19,8 +19,8 @@ const (
 )
 
 type DoorbellPressEvent struct {
-	EventID           string  `json:"eventId"`
-	DeviceID          string  `json:"deviceId"`
+	EventID           string  `json:"-"`
+	DeviceID          string  `json:"-"`
 	Timestamp         int64   `json:"timestamp"`
 	Event             string  `json:"event,omitempty"`
 	Image             string  `json:"image,omitempty"`
@@ -29,16 +29,17 @@ type DoorbellPressEvent struct {
 }
 
 type CaptureEvent struct {
-	EventID   string `json:"eventId,omitempty"`
-	TrackID   string `json:"trackId,omitempty"`
-	DeviceID  string `json:"deviceId"`
+	EventID   string `json:"-"`
+	TrackID   string `json:"-"`
+	DeviceID  string `json:"-"`
 	Timestamp int64  `json:"timestamp,omitempty"`
 	RTSPURL   string `json:"rtspUrl,omitempty"`
 }
+
 type StreamEndEvent struct {
-	EventID   string `json:"eventId,omitempty"`
-	TrackID   string `json:"trackId,omitempty"`
-	DeviceID  string `json:"deviceId"`
+	EventID   string `json:"-"`
+	TrackID   string `json:"-"`
+	DeviceID  string `json:"-"`
 	Timestamp int64  `json:"timestamp,omitempty"`
 }
 
@@ -64,19 +65,12 @@ type DeviceMediaEvent struct {
 	Data      string `json:"data"`
 }
 
-type OrchestratorAssessment struct {
-	Status   string `json:"status"`
-	Severity string `json:"severity"`
-	Message  string `json:"message"`
-	Verdict  string `json:"verdict"`
-}
-
 type OrchestratorEventData struct {
-	TrackID       string                   `json:"trackId"`
-	ChunkType     string                   `json:"chunkType"`
-	FinalVerdict  *string                  `json:"finalVerdict"`
-	FinalSeverity *string                  `json:"finalSeverity"`
-	Assessments   []OrchestratorAssessment `json:"assessments"`
+	TrackID       string `json:"trackId"`
+	ChunkType     string `json:"chunkType"`
+	FinalVerdict  string `json:"finalVerdict"`
+	FinalSeverity string `json:"finalSeverity"`
+	Message       string `json:"message"`
 }
 
 type OrchestratorEventResponse struct {
@@ -84,8 +78,9 @@ type OrchestratorEventResponse struct {
 }
 
 type DeviceInstruction struct {
-	TrackID   string `json:"trackId"`
-	DeviceID  string `json:"deviceId"`
+	MessageID string `json:"messageId"`
+	TrackID   string `json:"-"`
+	DeviceID  string `json:"-"`
 	ChunkType string `json:"chunkType"`
 	Action    string `json:"action"`
 	Severity  string `json:"severity"`

@@ -85,11 +85,7 @@ func TestEventHandler_PressBindsTopicIdentity(t *testing.T) {
 
 	svc := &recordingEventService{}
 	handler := NewEventHandler(svc)
-	payload, err := json.Marshal(domain.DoorbellPressEvent{
-		EventID:  "track-1",
-		DeviceID: "device-a",
-		Event:    "press",
-	})
+	payload, err := json.Marshal(domain.DoorbellPressEvent{Event: "press"})
 	require.NoError(t, err)
 
 	handler.handleHomeEventMessage(nil, stubMQTTMessage{
@@ -97,29 +93,28 @@ func TestEventHandler_PressBindsTopicIdentity(t *testing.T) {
 		payload: payload,
 	})
 
-	require.Equal(t, 1, svc.pressCount())
+	require.Eventually(t, func() bool { return svc.pressCount() == 1 }, time.Second, 5*time.Millisecond)
+	svc.mu.Lock()
+	defer svc.mu.Unlock()
 	assert.Equal(t, "device-a", svc.presses[0].DeviceID)
 	assert.Equal(t, "track-1", svc.presses[0].EventID)
 }
 
-func TestEventHandler_DiscardsMismatchedPressIdentity(t *testing.T) {
+func TestEventHandler_IgnoresIdentityFieldsInPressBody(t *testing.T) {
 	t.Parallel()
 
 	svc := &recordingEventService{}
 	handler := NewEventHandler(svc)
-	payload, err := json.Marshal(domain.DoorbellPressEvent{
-		EventID:  "track-other",
-		DeviceID: "device-a",
-		Event:    "press",
-	})
-	require.NoError(t, err)
-
 	handler.handleHomeEventMessage(nil, stubMQTTMessage{
 		topic:   "home/device-a/events/track-1/press",
-		payload: payload,
+		payload: []byte(`{"eventId":"track-other","deviceId":"device-other","event":"press"}`),
 	})
 
-	assert.Equal(t, 0, svc.pressCount())
+	require.Eventually(t, func() bool { return svc.pressCount() == 1 }, time.Second, 5*time.Millisecond)
+	svc.mu.Lock()
+	defer svc.mu.Unlock()
+	assert.Equal(t, "device-a", svc.presses[0].DeviceID)
+	assert.Equal(t, "track-1", svc.presses[0].EventID)
 }
 
 func TestEventHandler_StreamEndBindsTrackFromTopic(t *testing.T) {
@@ -127,12 +122,25 @@ func TestEventHandler_StreamEndBindsTrackFromTopic(t *testing.T) {
 
 	svc := &recordingEventService{}
 	handler := NewEventHandler(svc)
-	payload, err := json.Marshal(domain.StreamEndEvent{DeviceID: "device-a"})
-	require.NoError(t, err)
-
 	handler.handleHomeEventMessage(nil, stubMQTTMessage{
 		topic:   "home/device-a/events/track-1/stream_end",
-		payload: payload,
+		payload: []byte(`{"timestamp":1730000030000}`),
+	})
+
+	require.Len(t, svc.ends, 1)
+	assert.Equal(t, "device-a", svc.ends[0].DeviceID)
+	assert.Equal(t, "track-1", svc.ends[0].TrackID)
+	assert.Equal(t, int64(1730000030000), svc.ends[0].Timestamp)
+}
+
+func TestEventHandler_StreamEndAcceptsEmptyJSON(t *testing.T) {
+	t.Parallel()
+
+	svc := &recordingEventService{}
+	handler := NewEventHandler(svc)
+	handler.handleHomeEventMessage(nil, stubMQTTMessage{
+		topic:   "home/device-a/events/track-1/stream_end",
+		payload: []byte(`{}`),
 	})
 
 	require.Len(t, svc.ends, 1)
@@ -185,12 +193,9 @@ func TestEventHandler_CaptureImageUsesTopicIdentity(t *testing.T) {
 
 	svc := &recordingEventService{}
 	handler := NewEventHandler(svc)
-	payload, err := json.Marshal(domain.CaptureEvent{DeviceID: "device-a"})
-	require.NoError(t, err)
-
 	handler.handleHomeEventMessage(nil, stubMQTTMessage{
 		topic:   "home/device-a/events/track-1/capture_image",
-		payload: payload,
+		payload: []byte(`{}`),
 	})
 
 	require.Len(t, svc.captures, 1)
@@ -203,15 +208,13 @@ func TestEventHandler_CaptureAudioUsesTopicIdentity(t *testing.T) {
 
 	svc := &recordingEventService{}
 	handler := NewEventHandler(svc)
-	payload, err := json.Marshal(domain.CaptureEvent{DeviceID: "device-a", TrackID: "track-1"})
-	require.NoError(t, err)
-
 	handler.handleHomeEventMessage(nil, stubMQTTMessage{
 		topic:   "home/device-a/events/track-1/capture_audio",
-		payload: payload,
+		payload: []byte(`{"timestamp":1730000010000}`),
 	})
 
 	require.Len(t, svc.captures, 1)
+	assert.Equal(t, "device-a", svc.captures[0].DeviceID)
 	assert.Equal(t, "track-1", svc.captures[0].TrackID)
 }
 

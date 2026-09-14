@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -124,10 +125,16 @@ func (s *eventService) HandleDoorbellPress(_ context.Context, event domain.Doorb
 	}
 
 	session, sessionCtx := s.sessions.StartSession(event.DeviceID, event.EventID, rtspURL)
-	log.Printf("started session device=%s trackId=%s rtsp=%s", session.DeviceID, session.TrackID, session.RTSPURL)
+	log.Printf("started session device=%s trackId=%s rtsp=%s", session.DeviceID, session.TrackID, redactRTSPUserinfo(session.RTSPURL))
 
-	if err := s.dispatchPressSnapshot(sessionCtx, session, event); err != nil && sessionCtx.Err() == nil {
-		log.Printf("failed to dispatch doorbell snapshot for device %s: %v", session.DeviceID, err)
+	if err := s.dispatchPressSnapshot(sessionCtx, session, event); err != nil {
+		if sessionCtx.Err() == nil {
+			log.Printf("failed to dispatch doorbell snapshot for device %s: %v", session.DeviceID, err)
+		}
+		return nil
+	}
+	if sessionCtx.Err() != nil || !s.sessionIsCurrent(session) {
+		return nil
 	}
 
 	s.workers.Add(1)
@@ -417,7 +424,7 @@ func (s *eventService) extractAndDispatchChunk(
 			if ctx.Err() != nil {
 				return false
 			}
-			log.Printf("failed to extract %s chunk %d for device %s: %v", label, chunkNumber, session.DeviceID, err)
+			log.Printf("failed to extract %s chunk %d for device %s: %s", label, chunkNumber, session.DeviceID, redactRTSPUserinfo(err.Error()))
 			if !waitForRetry(ctx, time.Second) {
 				return false
 			}
@@ -464,23 +471,7 @@ func (s *eventService) dispatchPreparedMedia(ctx context.Context, req domain.Med
 		return err
 	}
 
-	instructionTrackID := req.TrackID
-	if data != nil && data.TrackID != "" {
-		instructionTrackID = data.TrackID
-	}
-	payload := domain.OrchestratorEventData{}
-	if data != nil {
-		payload = *data
-		payload.TrackID = instructionTrackID
-		if payload.ChunkType == "" {
-			payload.ChunkType = string(req.MediaType)
-		}
-	} else {
-		payload.TrackID = req.TrackID
-		payload.ChunkType = string(req.MediaType)
-	}
-
-	instruction := domain.InstructionFromOrchestrator(req.DeviceID, payload)
+	instruction := domain.InstructionFromOrchestrator(req.DeviceID, *data)
 	instruction.TrackID = req.TrackID
 	req.Action = instruction.Action
 	s.debugMedia.Write(req)
@@ -498,12 +489,16 @@ func (s *eventService) publishInstruction(instruction domain.DeviceInstruction) 
 	if commander == nil {
 		return
 	}
+	if instruction.MessageID == "" {
+		instruction.MessageID = domain.NewMQTTMessageID()
+	}
 	if err := commander.SendInstruction(instruction); err != nil {
 		log.Printf("failed to publish device instruction for device %s: %v", instruction.DeviceID, err)
 		return
 	}
 	log.Printf(
-		"published ESP32 instruction device=%s trackId=%s chunkType=%s action=%s severity=%s",
+		"published ESP32 instruction messageId=%s device=%s trackId=%s chunkType=%s action=%s severity=%s",
+		instruction.MessageID,
 		instruction.DeviceID,
 		instruction.TrackID,
 		instruction.ChunkType,
@@ -582,3 +577,9 @@ func validateRTSPURL(rawURL string) error {
 	}
 	return nil
 }
+
+func redactRTSPUserinfo(raw string) string {
+	return userinfoInURL.ReplaceAllString(raw, `${1}***@`)
+}
+
+var userinfoInURL = regexp.MustCompile(`(?i)((?:rtsp|rtsps|mqtt|mqtts|ssl|tls)://[^:/?#\s]+:)[^@/?#\s]+@`)

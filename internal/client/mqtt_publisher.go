@@ -24,6 +24,9 @@ func (p *MQTTInstructionPublisher) SendInstruction(instruction domain.DeviceInst
 	}
 
 	topic := domain.HomeEventTopicPath(instruction.DeviceID, instruction.TrackID, domain.MQTTActionAIResponse)
+	if instruction.MessageID == "" {
+		instruction.MessageID = domain.NewMQTTMessageID()
+	}
 	payload, err := json.Marshal(instruction)
 	if err != nil {
 		return fmt.Errorf("marshal device instruction: %w", err)

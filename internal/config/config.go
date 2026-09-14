@@ -19,6 +19,10 @@ type Config struct {
 	MQTTClientID        string
 	MQTTUsername        string
 	MQTTPassword        string
+	MQTTCACert          string
+	MQTTClientCert      string
+	MQTTClientKey       string
+	MQTTTLSInsecure     bool
 	SessionTTL          time.Duration
 	AudioChunkDuration  time.Duration
 	VideoChunkDuration  time.Duration
@@ -30,6 +34,9 @@ type Config struct {
 	DebugMediaEnabled   bool
 	DebugMediaMaxFiles  int
 	RTSPBase            string
+	RTSPCACert          string
+	RTSPTLSInsecure     bool
+	PressMaxInflight    int
 }
 
 func Load() Config {
@@ -46,6 +53,10 @@ func Load() Config {
 		MQTTClientID:        getEnv("MQTT_CLIENT_ID", "gateway-micro"),
 		MQTTUsername:        getEnv("MQTT_USERNAME", ""),
 		MQTTPassword:        getEnv("MQTT_PASSWORD", ""),
+		MQTTCACert:          getEnv("MQTT_CA_CERT", ""),
+		MQTTClientCert:      getEnv("MQTT_CLIENT_CERT", ""),
+		MQTTClientKey:       getEnv("MQTT_CLIENT_KEY", ""),
+		MQTTTLSInsecure:     getEnvBool("MQTT_TLS_INSECURE", false),
 		SessionTTL:          getEnvDuration("SESSION_TTL", 30*time.Second),
 		AudioChunkDuration:  getEnvDuration("AUDIO_CHUNK_DURATION", 10*time.Second),
 		VideoChunkDuration:  getEnvDuration("VIDEO_CHUNK_DURATION", 5*time.Second),
@@ -57,6 +68,9 @@ func Load() Config {
 		DebugMediaEnabled:   getEnvBoolExplicit("DEBUG_MEDIA_ENABLED"),
 		DebugMediaMaxFiles:  getEnvInt("DEBUG_MEDIA_MAX_FILES", 0),
 		RTSPBase:            getEnv("RTSP_BASE", "rtsp://localhost:8554"),
+		RTSPCACert:          getEnv("RTSP_CA_CERT", ""),
+		RTSPTLSInsecure:     getEnvBool("RTSP_TLS_INSECURE", false),
+		PressMaxInflight:    getEnvInt("PRESS_MAX_INFLIGHT", 8),
 	}
 }
 

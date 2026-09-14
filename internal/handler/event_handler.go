@@ -18,11 +18,25 @@ import (
 )
 
 type EventHandler struct {
-	service service.EventService
+	service    service.EventService
+	dispatcher *pressDispatcher
 }
 
 func NewEventHandler(svc service.EventService) *EventHandler {
-	return &EventHandler{service: svc}
+	return NewEventHandlerWithPressLimit(svc, defaultPressMaxInflight)
+}
+
+func NewEventHandlerWithPressLimit(svc service.EventService, maxInflight int) *EventHandler {
+	return &EventHandler{
+		service:    svc,
+		dispatcher: newPressDispatcher(svc, maxInflight),
+	}
+}
+
+func (h *EventHandler) Close() {
+	if h.dispatcher != nil {
+		h.dispatcher.Close()
+	}
 }
 
 func (h *EventHandler) RegisterMQTTSubscriptions(client mqtt.Client) error {
@@ -74,10 +88,6 @@ func (h *EventHandler) handleDoorbellPressMessage(message mqtt.Message, topic do
 		log.Printf("MQTT INVALID JSON error=%v payload=%q", err, string(message.Payload()))
 		return
 	}
-	if err := domain.BindTopicIdentity(topic, event.DeviceID, "", event.EventID); err != nil {
-		log.Printf("discarding MQTT payload topic=%s error=%v", message.Topic(), err)
-		return
-	}
 	event.DeviceID = topic.DeviceID
 	event.EventID = topic.TrackID
 
@@ -90,9 +100,7 @@ func (h *EventHandler) handleDoorbellPressMessage(message mqtt.Message, topic do
 		len(event.Image),
 	)
 
-	if err := h.service.HandleDoorbellPress(context.Background(), event); err != nil {
-		log.Printf("MQTT PROCESSING ERROR: %v", err)
-	}
+	h.dispatcher.Submit(event)
 }
 
 func (h *EventHandler) handleStreamEndMessage(message mqtt.Message, topic domain.HomeEventTopic, rawPayload string) {
@@ -112,10 +120,6 @@ func (h *EventHandler) handleStreamEndMessage(message mqtt.Message, topic domain
 			err,
 			rawPayload,
 		)
-		return
-	}
-	if err := domain.BindTopicIdentity(topic, event.DeviceID, event.TrackID, event.EventID); err != nil {
-		log.Printf("discarding MQTT payload topic=%s error=%v", message.Topic(), err)
 		return
 	}
 	event.DeviceID = topic.DeviceID
@@ -139,10 +143,6 @@ func (h *EventHandler) handleCaptureMessage(mediaType domain.MediaType, message 
 	var event domain.CaptureEvent
 	if err := json.Unmarshal(message.Payload(), &event); err != nil {
 		log.Printf("MQTT INVALID JSON topic=%s error=%v payload=%q", message.Topic(), err, rawPayload)
-		return
-	}
-	if err := domain.BindTopicIdentity(topic, event.DeviceID, event.TrackID, event.EventID); err != nil {
-		log.Printf("discarding MQTT payload topic=%s error=%v", message.Topic(), err)
 		return
 	}
 	event.DeviceID = topic.DeviceID

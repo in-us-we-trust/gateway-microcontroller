@@ -88,11 +88,11 @@ func (c *stopDangerDetectorClient) SendMediaEvent(ctx context.Context, req domai
 	}
 	if req.MediaType == c.stopOn {
 		return &domain.OrchestratorEventData{
-			TrackID:   req.TrackID,
-			ChunkType: string(req.MediaType),
-			Assessments: []domain.OrchestratorAssessment{
-				{Status: "DANGER", Severity: "HIGH", Message: "Stop.", Verdict: domain.DeviceActionStopDanger},
-			},
+			TrackID:       req.TrackID,
+			ChunkType:     string(req.MediaType),
+			FinalVerdict:  domain.DeviceActionStopDanger,
+			FinalSeverity: "HIGH",
+			Message:       "Stop.",
 		}, nil
 	}
 	return continueOrchestratorResponse(req), nil
@@ -100,17 +100,32 @@ func (c *stopDangerDetectorClient) SendMediaEvent(ctx context.Context, req domai
 
 func continueOrchestratorResponse(req domain.MediaEventRequest) *domain.OrchestratorEventData {
 	return &domain.OrchestratorEventData{
-		TrackID:   req.TrackID,
-		ChunkType: string(req.MediaType),
-		Assessments: []domain.OrchestratorAssessment{
-			{Status: "SAFE", Severity: "LOW", Message: "No danger.", Verdict: domain.DeviceActionContinue},
-		},
+		TrackID:       req.TrackID,
+		ChunkType:     string(req.MediaType),
+		FinalVerdict:  domain.DeviceActionContinue,
+		FinalSeverity: "LOW",
+		Message:       "No danger.",
 	}
+}
+
+type orchestratorTrackOverrideClient struct {
+	recordingDetectorClient
+	trackID string
+}
+
+func (c *orchestratorTrackOverrideClient) SendMediaEvent(ctx context.Context, req domain.MediaEventRequest) (*domain.OrchestratorEventData, error) {
+	data, err := c.recordingDetectorClient.SendMediaEvent(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	data.TrackID = c.trackID
+	return data, nil
 }
 
 type stubMediaExtractor struct {
 	mu         sync.Mutex
 	audioCalls int
+	videoCalls int
 }
 
 func (e *stubMediaExtractor) ExtractImage(context.Context, string) ([]byte, error) {
@@ -145,6 +160,9 @@ func (e *stubMediaExtractor) ExtractVideoChunk(
 	_ string,
 	_ time.Duration,
 ) ([]byte, error) {
+	e.mu.Lock()
+	e.videoCalls++
+	e.mu.Unlock()
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -356,8 +374,10 @@ func TestEventService_StopDangerEndsBothWorkers(t *testing.T) {
 		}
 	}
 
-	_, active := sessions.GetActiveSession("device-stop")
-	assert.False(t, active)
+	require.Eventually(t, func() bool {
+		_, active := sessions.GetActiveSession("device-stop")
+		return !active
+	}, time.Second, 5*time.Millisecond)
 
 	drainUntil := time.Now().Add(80 * time.Millisecond)
 	for time.Now().Before(drainUntil) {
@@ -373,6 +393,56 @@ func TestEventService_StopDangerEndsBothWorkers(t *testing.T) {
 		t.Fatalf("worker kept dispatching after STOP_DANGER: %s", mediaEvent.MediaType)
 	case <-time.After(150 * time.Millisecond):
 	}
+
+	eventService.Close()
+}
+
+func TestEventService_ImageStopDangerDoesNotStartRTSP(t *testing.T) {
+	t.Parallel()
+
+	extractor := &stubMediaExtractor{}
+	detector := &stopDangerDetectorClient{
+		mediaEvents: make(chan domain.MediaEventRequest, 8),
+		stopOn:      domain.MediaTypeImage,
+	}
+	sessions := NewSessionService(time.Minute)
+	eventService := NewGatewayEventService(
+		detector,
+		sessions,
+		extractor,
+		EventServiceConfig{
+			AudioChunkDuration:  10 * time.Millisecond,
+			VideoChunkDuration:  10 * time.Millisecond,
+			AudioFormat:         "wav",
+			MediaRequestTimeout: 100 * time.Millisecond,
+		},
+	)
+
+	err := eventService.HandleDoorbellPress(context.Background(), domain.DoorbellPressEvent{
+		EventID:  "track-image-stop",
+		DeviceID: "device-image-stop",
+		Event:    "press",
+		Image:    base64.StdEncoding.EncodeToString([]byte("press-jpeg")),
+	})
+	require.NoError(t, err)
+
+	select {
+	case mediaEvent := <-detector.mediaEvents:
+		assert.Equal(t, domain.MediaTypeImage, mediaEvent.MediaType)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for IMAGE")
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	extractor.mu.Lock()
+	videoCalls := extractor.videoCalls
+	audioCalls := extractor.audioCalls
+	extractor.mu.Unlock()
+	assert.Equal(t, 0, videoCalls)
+	assert.Equal(t, 0, audioCalls)
+
+	_, active := sessions.GetActiveSession("device-image-stop")
+	assert.False(t, active)
 
 	eventService.Close()
 }
@@ -629,8 +699,27 @@ func TestBuildDoorbellRTSPURL(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "rtsp://mediamtx:8554/dev-1/doorbell/track-1", got)
 
+	got, err = BuildDoorbellRTSPURL("rtsps://gateway:gw-lab@mediamtx:8322", "dev-1", "track-1")
+	require.NoError(t, err)
+	assert.Equal(t, "rtsps://gateway:gw-lab@mediamtx:8322/dev-1/doorbell/track-1", got)
+
 	_, err = BuildDoorbellRTSPURL("http://mediamtx:8554", "dev-1", "track-1")
 	require.Error(t, err)
+}
+
+func TestRedactRTSPUserinfo(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t,
+		"rtsps://gateway:***@mediamtx:8322/dev-1/doorbell/track-1",
+		redactRTSPUserinfo("rtsps://gateway:gw-lab@mediamtx:8322/dev-1/doorbell/track-1"),
+	)
+	assert.Equal(t,
+		"rtsp://mediamtx:8554/dev-1/doorbell/track-1",
+		redactRTSPUserinfo("rtsp://mediamtx:8554/dev-1/doorbell/track-1"),
+	)
+	assert.Contains(t, redactRTSPUserinfo("run FFmpeg: rtsps://gateway:super-secret@host:8322/path"), "gateway:***@")
+	assert.NotContains(t, redactRTSPUserinfo("run FFmpeg: rtsps://gateway:super-secret@host:8322/path"), "super-secret")
 }
 
 type recordingCommander struct {
@@ -753,12 +842,52 @@ func TestEventService_PublishesContinueInstructionAfterChunk(t *testing.T) {
 	commander.mu.Lock()
 	instruction := commander.instructions[0]
 	commander.mu.Unlock()
+	assert.NotEmpty(t, instruction.MessageID)
 	assert.Equal(t, "device-cmd", instruction.DeviceID)
 	assert.Equal(t, "track-cmd", instruction.TrackID)
+	assert.Equal(t, "IMAGE", instruction.ChunkType)
 	assert.Equal(t, domain.DeviceActionContinue, instruction.Action)
+	assert.Equal(t, "LOW", instruction.Severity)
+	assert.Equal(t, "No danger.", instruction.Message)
 
 	require.NoError(t, eventService.HandleStreamEnd(context.Background(), domain.StreamEndEvent{
 		DeviceID: "device-cmd", TrackID: "track-cmd",
+	}))
+}
+
+func TestEventService_KeepsLocalTrackIDWhenOrchestratorReturnsAnother(t *testing.T) {
+	t.Parallel()
+
+	detector := &orchestratorTrackOverrideClient{
+		recordingDetectorClient: recordingDetectorClient{mediaEvents: make(chan domain.MediaEventRequest, 8)},
+		trackID:                 "track-from-dm",
+	}
+	commander := &recordingCommander{}
+	sessions := NewSessionService(time.Minute)
+	eventService := NewGatewayEventService(detector, sessions, &stubMediaExtractor{}, EventServiceConfig{
+		AudioFormat: "mp3", RTSPBase: "rtsp://mediamtx:8554", MediaRequestTimeout: 100 * time.Millisecond,
+	})
+	eventService.SetDeviceCommander(commander)
+	t.Cleanup(eventService.Close)
+
+	require.NoError(t, eventService.HandleDoorbellPress(context.Background(), domain.DoorbellPressEvent{
+		EventID: "track-local", DeviceID: "device-keep", Image: base64.StdEncoding.EncodeToString([]byte("jpeg")),
+	}))
+
+	require.Eventually(t, func() bool {
+		commander.mu.Lock()
+		defer commander.mu.Unlock()
+		return len(commander.instructions) > 0
+	}, time.Second, 10*time.Millisecond)
+
+	commander.mu.Lock()
+	instruction := commander.instructions[0]
+	commander.mu.Unlock()
+	assert.Equal(t, "track-local", instruction.TrackID)
+	assert.Equal(t, "device-keep", instruction.DeviceID)
+
+	require.NoError(t, eventService.HandleStreamEnd(context.Background(), domain.StreamEndEvent{
+		DeviceID: "device-keep", TrackID: "track-local",
 	}))
 }
 

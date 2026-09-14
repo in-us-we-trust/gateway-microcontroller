@@ -27,9 +27,9 @@ import (
 func main() {
 	cfg := config.Load()
 
-	detectorClient := client.NewHTTPDetectorClient(cfg.DetectiveManagerURL)
+	detectorClient := client.NewHTTPDetectorClientWithTimeout(cfg.DetectiveManagerURL, cfg.MediaRequestTimeout)
 	sessionService := service.NewSessionService(cfg.SessionTTL)
-	mediaExtractor := service.NewFFmpegMediaExtractor(cfg.FFmpegPath)
+	mediaExtractor := service.NewFFmpegMediaExtractor(cfg.FFmpegPath).WithRTSPTLS(cfg.RTSPCACert, cfg.RTSPTLSInsecure)
 	eventService := service.NewGatewayEventService(
 		detectorClient,
 		sessionService,
@@ -50,7 +50,8 @@ func main() {
 	)
 	defer eventService.Close()
 
-	eventHandler := handler.NewEventHandler(eventService)
+	eventHandler := handler.NewEventHandlerWithPressLimit(eventService, cfg.PressMaxInflight)
+	defer eventHandler.Close()
 
 	deviceService := service.NewDeviceService(detectorClient)
 	deviceHandler := handler.NewDeviceHandler(deviceService)
@@ -74,6 +75,13 @@ func main() {
 		if cfg.MQTTUsername != "" {
 			options.SetUsername(cfg.MQTTUsername)
 			options.SetPassword(cfg.MQTTPassword)
+		}
+		tlsCfg, err := cfg.MQTTTLSConfig()
+		if err != nil {
+			log.Fatalf("MQTT TLS config: %v", err)
+		}
+		if tlsCfg != nil {
+			options.SetTLSConfig(tlsCfg)
 		}
 
 		mqttClient = mqtt.NewClient(options)

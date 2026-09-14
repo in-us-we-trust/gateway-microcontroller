@@ -101,11 +101,11 @@ func TestHTTPDetectorClient_SendMediaEvent_SendsMultipartPayload(t *testing.T) {
 				w.Header().Set("Content-Type", "application/json")
 				require.NoError(t, json.NewEncoder(w).Encode(domain.OrchestratorEventResponse{
 					Data: domain.OrchestratorEventData{
-						TrackID:   "track-123",
-						ChunkType: string(tt.mediaType),
-						Assessments: []domain.OrchestratorAssessment{
-							{Status: "SAFE", Severity: "LOW", Message: "No danger.", Verdict: domain.DeviceActionContinue},
-						},
+						TrackID:       "track-123",
+						ChunkType:     string(tt.mediaType),
+						FinalVerdict:  domain.DeviceActionContinue,
+						FinalSeverity: "LOW",
+						Message:       "No danger.",
 					},
 				}))
 			}))

@@ -1,8 +1,11 @@
 package domain
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"strings"
+	"time"
 )
 
 const (
@@ -25,6 +28,17 @@ func HomeEventTopicPath(deviceID, trackID, action string) string {
 	return "home/" + deviceID + "/events/" + trackID + "/" + action
 }
 
+func NewMQTTMessageID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	h := hex.EncodeToString(b[:])
+	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:32]
+}
+
 func ParseHomeEventTopic(topic string) (HomeEventTopic, error) {
 	parts := strings.Split(topic, "/")
 	if len(parts) != 5 || parts[0] != "home" || parts[2] != "events" {
@@ -42,24 +56,4 @@ func ParseHomeEventTopic(topic string) (HomeEventTopic, error) {
 	}
 
 	return HomeEventTopic{DeviceID: deviceID, TrackID: trackID, Action: action}, nil
-}
-
-func BindTopicIdentity(topic HomeEventTopic, jsonDeviceID, jsonTrackID, jsonEventID string) error {
-	jsonDeviceID = strings.TrimSpace(jsonDeviceID)
-	jsonTrackID = strings.TrimSpace(jsonTrackID)
-	jsonEventID = strings.TrimSpace(jsonEventID)
-
-	if jsonDeviceID != "" && jsonDeviceID != topic.DeviceID {
-		return fmt.Errorf("deviceId in payload %q does not match topic %q", jsonDeviceID, topic.DeviceID)
-	}
-
-	jsonCallID := jsonTrackID
-	if jsonCallID == "" {
-		jsonCallID = jsonEventID
-	}
-	if jsonCallID != "" && jsonCallID != topic.TrackID {
-		return fmt.Errorf("trackId in payload %q does not match topic %q", jsonCallID, topic.TrackID)
-	}
-
-	return nil
 }

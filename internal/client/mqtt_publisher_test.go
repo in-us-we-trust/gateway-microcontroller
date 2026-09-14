@@ -70,9 +70,17 @@ func TestMQTTInstructionPublisher_PublishesOnCallTopic(t *testing.T) {
 	require.NoError(t, publisher.SendInstruction(instruction))
 
 	assert.Equal(t, "home/device-a/events/track-1/ia_response", broker.topic)
-	var got domain.DeviceInstruction
+	var got map[string]string
 	require.NoError(t, json.Unmarshal(broker.payload, &got))
-	assert.Equal(t, instruction, got)
+	assert.NotEmpty(t, got["messageId"])
+	assert.Equal(t, "AUDIO", got["chunkType"])
+	assert.Equal(t, domain.DeviceActionContinue, got["action"])
+	assert.Equal(t, "LOW", got["severity"])
+	assert.Equal(t, "No blocking alerts.", got["message"])
+	_, hasDeviceID := got["deviceId"]
+	_, hasTrackID := got["trackId"]
+	assert.False(t, hasDeviceID)
+	assert.False(t, hasTrackID)
 }
 
 func TestMQTTInstructionPublisher_RequiresConfiguredClient(t *testing.T) {
