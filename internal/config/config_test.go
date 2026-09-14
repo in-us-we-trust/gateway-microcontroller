@@ -1,14 +1,31 @@
 package config
 
 import (
+	"os"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 )
 
+func chdirTemp(t *testing.T) {
+	t.Helper()
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(orig); err != nil {
+			t.Errorf("restore working directory: %v", err)
+		}
+	})
+}
+
 func TestLoad_UsesDocumentedDefaultsWithoutEnvFile(t *testing.T) {
-	t.Chdir(t.TempDir())
+	chdirTemp(t)
 
 	cfg := Load()
 	assert.Equal(t, 30*time.Second, cfg.SessionTTL)
@@ -27,7 +44,7 @@ func TestLoad_UsesDocumentedDefaultsWithoutEnvFile(t *testing.T) {
 }
 
 func TestLoad_OperatorEnvConfiguresRTSPAndSession(t *testing.T) {
-	t.Chdir(t.TempDir())
+	chdirTemp(t)
 	t.Setenv("RTSP_BASE", "rtsp://mediamtx:8554")
 	t.Setenv("SESSION_TTL", "2m")
 	t.Setenv("MQTT_ENABLED", "false")
@@ -63,7 +80,7 @@ func TestLoad_OperatorEnvConfiguresRTSPAndSession(t *testing.T) {
 }
 
 func TestLoad_InvalidEnvKeepsSafeDefaults(t *testing.T) {
-	t.Chdir(t.TempDir())
+	chdirTemp(t)
 	t.Setenv("SESSION_TTL", "nope")
 	t.Setenv("ENABLE_MTLS", "maybe")
 	t.Setenv("DEBUG_MEDIA_ENABLED", "maybe")
