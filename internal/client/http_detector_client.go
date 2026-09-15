@@ -27,10 +27,17 @@ type HTTPDetectorClient struct {
 }
 
 func NewHTTPDetectorClient(baseURL string) *HTTPDetectorClient {
+	return NewHTTPDetectorClientWithTimeout(baseURL, 15*time.Second)
+}
+
+func NewHTTPDetectorClientWithTimeout(baseURL string, timeout time.Duration) *HTTPDetectorClient {
+	if timeout <= 0 {
+		timeout = 15 * time.Second
+	}
 	return &HTTPDetectorClient{
 		baseURL: baseURL,
 		httpClient: &http.Client{
-			Timeout:   60 * time.Second,
+			Timeout:   timeout,
 			Transport: &loggingRoundTripper{next: http.DefaultTransport},
 		},
 	}

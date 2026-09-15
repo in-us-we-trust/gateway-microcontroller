@@ -4,13 +4,14 @@
 
 When an ESP32 publishes a doorbell press, the gateway:
 
-1. Uses the MQTT `eventId` as the session `trackId`.
+1. Reads `deviceId` and `trackId` (`eventId`) from the MQTT topic `home/{deviceId}/events/{trackId}/press`.
 2. Stores an active `deviceId -> trackId` session with a configurable TTL.
-3. Forwards the press JPEG snapshot from the MQTT `image` field (Base64) as `IMAGE`.
-4. Pulls short video and audio chunks from RTSP incrementally (does not buffer the whole stream).
-5. Sends each chunk to Detective Manager with the same `trackId`.
-6. If `DEBUG_MEDIA_ENABLED` is true, writes sent files under `DEBUG_MEDIA_DIR` (capped by `DEBUG_MEDIA_MAX_FILES`).
-7. Stops processing when a stream-end message arrives, the session TTL expires, or Detective Manager returns `STOP_DANGER`.
+3. Builds the RTSP URL as `{RTSP_BASE}/{deviceId}/doorbell/{trackId}` (the press JSON does not carry `rtspUrl`).
+4. Forwards the press JPEG snapshot from the MQTT `image` field (Base64) as `IMAGE`.
+5. Pulls short video and audio chunks from that RTSP path incrementally (does not buffer the whole stream).
+6. Sends each chunk to Detective Manager with the same `trackId`.
+7. If `DEBUG_MEDIA_ENABLED` is true, writes sent files under `DEBUG_MEDIA_DIR` (capped by `DEBUG_MEDIA_MAX_FILES`).
+8. Stops processing when a stream-end message arrives, the session TTL expires, or Detective Manager returns `STOP_DANGER`.
 
 ## Architecture
 
@@ -47,41 +48,42 @@ internal/client/http_detector_client.go  Detective Manager HTTP client
 
 ## MQTT Contracts
 
-| Topic | Direction | QoS | Current behavior |
-|---|---|---:|---|
-| `home/doorbell/events/press` | ESP32 to gateway | 1 | Starts a session and media workers |
-| `home/doorbell/events/stream_end` | ESP32 to gateway | 1 | Stops the active session |
-| `home/doorbell/status` | ESP32 to gateway | 1 | Defined, not subscribed yet |
-| `home/doorbell/telemetry` | ESP32 to gateway | 0 | Defined, not subscribed yet |
-| `home/doorbell/events/ia_response` | Gateway to ESP32 | 1 | Compact CONTINUE / STOP_DANGER after each orchestrator response |
+The gateway subscribes to `home/+/events/#`. Each call lives under its own `deviceId` and `trackId` (`eventId` of the press). Status and telemetry, if wired later, live at `home/{deviceId}/status` and `home/{deviceId}/telemetry` (not under a `trackId`).
 
-Doorbell press payload:
+| Topic                                            | Direction        | QoS | Current behavior                                                |
+| ------------------------------------------------ | ---------------- | --: | --------------------------------------------------------------- |
+| `home/{deviceId}/events/{trackId}/press`         | ESP32 to gateway |   1 | Starts a session and media workers                              |
+| `home/{deviceId}/events/{trackId}/stream_end`    | ESP32 to gateway |   1 | Stops that session if `trackId` matches                         |
+| `home/{deviceId}/events/{trackId}/capture_image` | ESP32 to gateway |   1 | One-shot JPEG from the session or built RTSP URL                |
+| `home/{deviceId}/events/{trackId}/capture_audio` | ESP32 to gateway |   1 | One-shot audio from the session or built RTSP URL               |
+| `home/{deviceId}/status`                         | ESP32 to gateway |   1 | Defined, not subscribed yet                                     |
+| `home/{deviceId}/telemetry`                      | ESP32 to gateway |   0 | Defined, not subscribed yet                                     |
+| `home/{deviceId}/events/{trackId}/ia_response`   | Gateway to ESP32 |   1 | Compact CONTINUE / STOP_DANGER after each orchestrator response |
+
+Each `ia_response` includes a unique `messageId`. The same `messageId` twice means MQTT redelivery, not two gateway publishes.
+
+Doorbell press payload (`image` and `batteryPercentage` optional):
 
 ```json
 {
-  "eventId": "dddddddd-ffff-dddd-dddd-ddddddddddaa",
-  "deviceId": "802fbc00-e78a-46fb-940f-4f462853b6cb",
   "timestamp": 1776268805120,
   "event": "press",
   "image": "/9j/4AAQSkZJRgABAQAAAQABAAD...",
-  "rtspUrl": "rtsp://192.168.1.50:554/stream/v1",
   "batteryPercentage": 94.5
 }
 ```
 
-`eventId` becomes the session `trackId`. `image` is a JPEG snapshot only; full video stays on RTSP. Sending the same active `eventId` again is treated as a duplicate and does not start another pair of media workers.
+The ESP32 generates `eventId` (`trackId`) **before** the press and publishes RTSP to `{RTSP_BASE}/{deviceId}/doorbell/{trackId}` first. `image` is a JPEG snapshot only; full video stays on RTSP. Sending the same active `eventId` again is treated as a duplicate and does not start another pair of media workers.
 
 Recommended stream-end payload:
 
 ```json
 {
-  "deviceId": "802fbc00-e78a-46fb-940f-4f462853b6cb",
-  "trackId": "dddddddd-ffff-dddd-dddd-ddddddddddaa",
   "timestamp": 1776268835120
 }
 ```
 
-`trackId` is optional for compatibility. It is recommended because it prevents a delayed stream-end event from closing a newer session for the same device.
+`trackId` in the topic is required. A delayed stream-end for an older `trackId` does not close a newer session for the same device.
 
 ## Detective Manager Contract
 
@@ -94,12 +96,12 @@ Content-Type: multipart/form-data
 
 Multipart fields:
 
-| Field | Value |
-|---|---|
-| `trackId` | Doorbell press `eventId` |
-| `deviceId` | Physical device UUID |
+| Field       | Value                        |
+| ----------- | ---------------------------- |
+| `trackId`   | Doorbell press `eventId`     |
+| `deviceId`  | Physical device UUID         |
 | `mediaType` | `IMAGE`, `AUDIO`, or `VIDEO` |
-| `file` | JPEG, WAV/MP3, or MP4 binary |
+| `file`      | JPEG, WAV/MP3, or MP4 binary |
 
 File MIME types are:
 
@@ -107,6 +109,20 @@ File MIME types are:
 - MP3: `audio/mpeg`
 - WAV: `audio/wav`
 - MP4: `video/mp4`
+
+Response:
+
+```json
+{
+  "data": {
+    "trackId": "string",
+    "chunkType": "IMAGE",
+    "finalVerdict": "STOP_DANGER",
+    "finalSeverity": "PELIGROSO",
+    "message": "No se reconoce a la persona"
+  }
+}
+```
 
 ## Prerequisites
 
@@ -120,7 +136,7 @@ For local development:
 
 For the Docker workflow:
 
-- Docker Desktop (optional; CD and `.\dev.ps1 up` use the Dockerfile)
+- Docker Desktop (optional; `docker build` / `docker run`, CD, and `.\dev.ps1 up` use the Dockerfile)
 - A reachable ESP32 or OBS RTSP stream
 
 The application image installs FFmpeg automatically. A native execution requires a local FFmpeg installation:
@@ -196,16 +212,16 @@ docker compose up -d
 
 # in this repo
 Copy-Item .env.example .env
-# set DETECTIVE_MANAGER_URL to the real service, MQTT_BROKER_URL to the VM broker
+# set DETECTIVE_MANAGER_URL to the real service, MQTT_BROKER_URL / RTSP_BASE to the VM
 go run ./cmd/api
-# or: .\dev.ps1 up
+# or docker (see below) / .\dev.ps1 up
 ```
 
 ### 2. Simulate the ESP32 (OBS + press)
 
 ```powershell
 .\dev.ps1 obs
-# Start streaming in OBS to rtmp://<MQTT_HOST>:1935/doorbell
+# Start streaming in OBS to rtmp://<MQTT_HOST>:1935/{deviceId}/doorbell/{trackId}
 .\dev.ps1 press
 .\dev.ps1 end
 ```
@@ -216,13 +232,13 @@ Optional file camera (instead of OBS):
 .\dev.ps1 rtsp -File ".\gorras frente.mp4"
 ```
 
-When the gateway runs in Docker, the press payload must use an RTSP URL reachable from that container (the VM IP, not `localhost`). When it runs on the host, `rtsp://localhost:8554/doorbell` is fine if MediaMTX is local.
+The gateway builds `rtsp://<RTSP_BASE host>/{deviceId}/doorbell/{trackId}`. Set `RTSP_BASE` to an address the gateway process can reach (the VM IP from Docker, `localhost` from the host). The press payload no longer includes `rtspUrl`.
 
 Expected after `press`:
 
 1. The gateway creates the session.
 2. One `IMAGE` request is sent (MQTT snapshot).
-3. `VIDEO` then `AUDIO` chunks follow the configured windows.
+3. `VIDEO` and `AUDIO` chunks follow in parallel on the configured windows.
 4. Every request contains the same `trackId`.
 
 ```powershell
@@ -245,36 +261,87 @@ DETECTIVE_MANAGER_URL=https://your-detective-manager
 MQTT_BROKER_URL=tcp://<MQTT_HOST>:1883
 ENABLE_MTLS=false
 FFMPEG_PATH=ffmpeg
+RTSP_BASE=rtsp://<MQTT_HOST>:8554
+```
+
+Against the secure Mosquitto/MediaMTX profile (client certs in `./certs`, password of the **gateway** user in the RTSP URL):
+
+```dotenv
+MQTT_BROKER_URL=ssl://<MQTT_HOST>:8883
+MQTT_CA_CERT=/certs/ca.crt
+MQTT_CLIENT_CERT=/certs/gateway.crt
+MQTT_CLIENT_KEY=/certs/gateway.key
+RTSP_BASE=rtsps://gateway:<gateway-rtsp-password>@<MQTT_HOST>:8322
+RTSP_CA_CERT=/certs/ca.crt
 ```
 
 ```powershell
 go run ./cmd/api
 ```
 
-Use `rtsp://<MQTT_HOST>:8554/doorbell` in the MQTT press payload (or `.\dev.ps1 press`).
+Or the same image Cloud Run uses (no Compose):
+
+```powershell
+docker build -t gateway-microcontroller:local .
+docker rm -f gateway-microcontroller 2>$null
+docker run --rm --name gateway-microcontroller `
+  --env-file .env `
+  -p 8080:8080 `
+  -v "${PWD}/debug-chunks:/app/debug-chunks" `
+  -v "${PWD}/certs:/certs:ro" `
+  gateway-microcontroller:local
+```
+
+Logs (follow):
+
+```powershell
+docker logs -f gateway-microcontroller
+```
+
+If you ran `docker run` in the foreground, logs are already in that terminal.
+
+Stop and remove it:
+
+```powershell
+docker rm -f gateway-microcontroller
+```
+
+If you ran `docker run` in the foreground, Ctrl+C is enough (`--rm` deletes the container on exit). `.\dev.ps1 down` does the same `rm -f` plus the publisher container.
+
+From inside the container, `127.0.0.1` is the container itself. Point `MQTT_BROKER_URL` and `RTSP_BASE` at the VM (or `host.docker.internal` if Mosquitto/MediaMTX are on the Docker host). `.\dev.ps1 up` is this build + `docker run -d`.
+
+Publish RTSP to `{RTSP_BASE}/{deviceId}/doorbell/{trackId}` before `.\dev.ps1 press`.
 
 ## Environment Variables
 
-| Variable | Default | Description |
-|---|---|---|
-| `PORT` | `8080` | Gin HTTP server port |
-| `DETECTIVE_MANAGER_URL` | `http://localhost:8081` | Detective Manager base URL |
-| `ENABLE_MTLS` | `true` | Uses the client-certificate header for legacy HTTP routes |
-| `MQTT_ENABLED` | `true` | Enables MQTT connection and subscriptions |
-| `MQTT_BROKER_URL` | `tcp://localhost:1883` | MQTT broker URL |
-| `MQTT_CLIENT_ID` | `gateway-micro` | MQTT client identifier; it must be unique per gateway |
-| `MQTT_USERNAME` | empty | MQTT username |
-| `MQTT_PASSWORD` | empty | MQTT password |
-| `SESSION_TTL` | `30s` | Maximum session duration; it is not refreshed by media activity |
-| `AUDIO_CHUNK_DURATION` | `10s` | Requested length of each audio chunk |
-| `VIDEO_CHUNK_DURATION` | `5s` | Requested length of each video chunk |
-| `AUDIO_FORMAT` | `mp3` | Output format: `mp3` or `wav` |
-| `MEDIA_CHUNK_BATCH_SIZE` | `1` | Extract N chunks, send them, then extract the next N |
-| `DEBUG_MEDIA_ENABLED` | unset | If unset or false, no debug files are written |
-| `DEBUG_MEDIA_MAX_FILES` | `20` when enabled | Maximum files kept in the debug directory |
-| `DEBUG_MEDIA_DIR` | `debug-chunks` when enabled | Directory for those files |
-| `FFMPEG_PATH` | `ffmpeg` | FFmpeg executable path |
-| `MEDIA_REQUEST_TIMEOUT` | `10s` | Image extraction and outbound HTTP timeout |
+| Variable                 | Default                     | Description                                                                                                                                                                 |
+| ------------------------ | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PORT`                   | `8080`                      | Gin HTTP server port                                                                                                                                                        |
+| `DETECTIVE_MANAGER_URL`  | `http://localhost:8081`     | Detective Manager base URL                                                                                                                                                  |
+| `ENABLE_MTLS`            | `true`                      | Uses the client-certificate header for legacy HTTP routes                                                                                                                   |
+| `MQTT_ENABLED`           | `true`                      | Enables MQTT connection and subscriptions                                                                                                                                   |
+| `MQTT_BROKER_URL`        | `tcp://localhost:1883`      | MQTT broker URL (`ssl://host:8883` or `mqtts://` for MQTTS)                                                                                                                 |
+| `MQTT_CLIENT_ID`         | `gateway-micro`             | MQTT client identifier; it must be unique per gateway. CN of the client cert should match this when using Mosquitto `use_identity_as_username`                              |
+| `MQTT_USERNAME`          | empty                       | MQTT username (optional if the broker takes identity from the client cert)                                                                                                  |
+| `MQTT_PASSWORD`          | empty                       | MQTT password                                                                                                                                                               |
+| `MQTT_CA_CERT`           | empty                       | CA PEM or file path used to verify the broker. Required for self-signed MQTTS                                                                                               |
+| `MQTT_CLIENT_CERT`       | empty                       | Gateway client cert PEM or file path (CN `gateway-micro`)                                                                                                                   |
+| `MQTT_CLIENT_KEY`        | empty                       | Gateway client key PEM or file path. Must be set together with `MQTT_CLIENT_CERT`                                                                                           |
+| `MQTT_TLS_INSECURE`      | `false`                     | Skip broker certificate verification (lab only)                                                                                                                             |
+| `SESSION_TTL`            | `30s`                       | Maximum session duration; it is not refreshed by media activity                                                                                                             |
+| `AUDIO_CHUNK_DURATION`   | `10s`                       | Requested length of each audio chunk                                                                                                                                        |
+| `VIDEO_CHUNK_DURATION`   | `5s`                        | Requested length of each video chunk                                                                                                                                        |
+| `AUDIO_FORMAT`           | `mp3`                       | Output format: `mp3` or `wav`                                                                                                                                               |
+| `MEDIA_CHUNK_BATCH_SIZE` | `1`                         | Kept for compatibility; it no longer serializes VIDEO behind AUDIO. Each type has its own worker                                                                            |
+| `DEBUG_MEDIA_ENABLED`    | unset                       | If unset or false, no debug files are written                                                                                                                               |
+| `DEBUG_MEDIA_MAX_FILES`  | `20` when enabled           | Maximum files kept in the debug directory                                                                                                                                   |
+| `DEBUG_MEDIA_DIR`        | `debug-chunks` when enabled | Directory for those files                                                                                                                                                   |
+| `FFMPEG_PATH`            | `ffmpeg`                    | FFmpeg executable path                                                                                                                                                      |
+| `RTSP_BASE`              | `rtsp://localhost:8554`     | MediaMTX base used to build `{RTSP_BASE}/{deviceId}/doorbell/{trackId}`. Include gateway user/password when MediaMTX requires auth, e.g. `rtsps://gateway:gw-lab@host:8322` |
+| `RTSP_CA_CERT`           | empty                       | CA file path passed to FFmpeg (`-ca_file`) for RTSPS                                                                                                                        |
+| `RTSP_TLS_INSECURE`      | `false`                     | FFmpeg `-tls_verify 0` for RTSPS (lab / self-signed)                                                                                                                        |
+| `MEDIA_REQUEST_TIMEOUT`  | `15s`                       | Image extraction and outbound HTTP timeout (also `http.Client` timeout)                                                                                                     |
+| `PRESS_MAX_INFLIGHT`     | `8`                         | Max simultaneous IMAGE POSTs across all devices. Each device still has at most one press in flight plus one pending                                                         |
 
 `DETECTOR_SERVICE_URL` is still accepted as a fallback for backward compatibility, but new deployments should use `DETECTIVE_MANAGER_URL`.
 
@@ -301,8 +368,9 @@ Use `rtsp://<MQTT_HOST>:8554/doorbell` in the MQTT press payload (or `.\dev.ps1 
 
 ### Concurrency and delivery
 
-- Image and audio workers start asynchronously after a valid press event.
-- Audio chunks are extracted and dispatched sequentially per session.
+- MQTT press is queued per `deviceId` (one in flight, latest pending). A global `PRESS_MAX_INFLIGHT` cap limits concurrent IMAGE POSTs. The MQTT callback does not wait for Detective Manager.
+- After a valid press, the IMAGE snapshot is sent first. VIDEO and AUDIO workers start only if that IMAGE is not `STOP_DANGER` and the session is still active. Those workers then run in parallel.
+- Within each worker, chunks are extracted and dispatched sequentially (extract then POST). A slow AUDIO POST does not block VIDEO extraction.
 - The extractor retries after errors, but failed Detective Manager HTTP requests are logged and the affected media artifact is not retried.
 - There is no durable queue or disk spool. A process crash or network outage can lose media events.
 - Multipart request bodies are buffered in memory before transmission. The configured short audio windows keep buffers bounded, but concurrency and chunk size still affect memory usage.
@@ -310,9 +378,9 @@ Use `rtsp://<MQTT_HOST>:8554/doorbell` in the MQTT press payload (or `.\dev.ps1 
 
 ### Deployment
 
-- This service is designed for an edge host that can reach the ESP32 RTSP address.
+- This service is designed for an edge host that can reach MediaMTX (`RTSP_BASE`).
 - A public cloud runtime usually cannot reach a private LAN RTSP URL without a VPN or private network path.
-- The development Mosquitto in `microcontroller-communication` allows anonymous connections. Production must use authentication, TLS, network restrictions, and unique MQTT client IDs.
+- The development Mosquitto in `microcontroller-communication` allows anonymous connections. Point this gateway at `tcp://` / `rtsp://` for that lab profile. The secure profile uses `ssl://host:8883` plus `MQTT_CA_CERT` / `MQTT_CLIENT_CERT` / `MQTT_CLIENT_KEY` (CN `gateway-micro`) and `rtsps://gateway:<password>@host:8322`. Mount cert files at `/certs` (Compose maps `./certs`). The gateway does not look up per-device RTSP passwords; those belong to MediaMTX and the publisher (ESP32 / OBS).
 - FFmpeg is installed in the Docker image; native deployments must install it separately.
 - CPU and memory requirements grow with the number of simultaneous doorbell sessions.
 
@@ -320,8 +388,8 @@ Use `rtsp://<MQTT_HOST>:8554/doorbell` in the MQTT press payload (or `.\dev.ps1 
 
 - The original Gin HTTP API remains available for backward compatibility.
 - MQTT status and telemetry ingestion are not implemented.
-- AI responses are published on `home/doorbell/events/ia_response`.
-- Press MQTT carries a JPEG snapshot. Video and audio continue over RTSP as incremental chunks.
+- AI responses are published on `home/{deviceId}/events/{trackId}/ia_response`.
+- Press MQTT carries a JPEG snapshot. Video and audio continue over RTSP as incremental chunks. The ESP32 does not send `rtspUrl`; the gateway builds it from `RTSP_BASE`.
 
 ## Troubleshooting
 
@@ -343,7 +411,7 @@ FFMPEG_PATH=C:\ffmpeg\bin\ffmpeg.exe
 
 ### Image extraction times out
 
-- Confirm that the RTSP URL is reachable from the gateway process or container.
+- Confirm that the RTSP URL built from `RTSP_BASE` is reachable from the gateway process or container.
 - Confirm that the stream has a video track.
 - Increase `MEDIA_REQUEST_TIMEOUT`.
 - When using Docker Desktop, replace `localhost` with `host.docker.internal`.
@@ -353,7 +421,7 @@ FFMPEG_PATH=C:\ffmpeg\bin\ffmpeg.exe
 Run:
 
 ```powershell
-ffprobe "rtsp://localhost:8554/doorbell"
+ffprobe "rtsp://localhost:8554/{deviceId}/doorbell/{trackId}"
 ```
 
 If FFmpeg reports `Stream map '0:a:0' matches no streams`, the RTSP source has no audio track.

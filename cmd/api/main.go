@@ -27,9 +27,9 @@ import (
 func main() {
 	cfg := config.Load()
 
-	detectorClient := client.NewHTTPDetectorClient(cfg.DetectiveManagerURL)
+	detectorClient := client.NewHTTPDetectorClientWithTimeout(cfg.DetectiveManagerURL, cfg.MediaRequestTimeout)
 	sessionService := service.NewSessionService(cfg.SessionTTL)
-	mediaExtractor := service.NewFFmpegMediaExtractor(cfg.FFmpegPath)
+	mediaExtractor := service.NewFFmpegMediaExtractor(cfg.FFmpegPath).WithRTSPTLS(cfg.RTSPCACert, cfg.RTSPTLSInsecure)
 	eventService := service.NewGatewayEventService(
 		detectorClient,
 		sessionService,
@@ -40,6 +40,7 @@ func main() {
 			AudioFormat:         cfg.AudioFormat,
 			MediaRequestTimeout: cfg.MediaRequestTimeout,
 			MediaChunkBatchSize: cfg.MediaChunkBatchSize,
+			RTSPBase:            cfg.RTSPBase,
 			DebugMedia: service.NewDebugMediaWriter(
 				cfg.DebugMediaEnabled,
 				cfg.DebugMediaDir,
@@ -49,7 +50,8 @@ func main() {
 	)
 	defer eventService.Close()
 
-	eventHandler := handler.NewEventHandler(eventService)
+	eventHandler := handler.NewEventHandlerWithPressLimit(eventService, cfg.PressMaxInflight)
+	defer eventHandler.Close()
 
 	deviceService := service.NewDeviceService(detectorClient)
 	deviceHandler := handler.NewDeviceHandler(deviceService)
@@ -74,6 +76,13 @@ func main() {
 			options.SetUsername(cfg.MQTTUsername)
 			options.SetPassword(cfg.MQTTPassword)
 		}
+		tlsCfg, err := cfg.MQTTTLSConfig()
+		if err != nil {
+			log.Fatalf("MQTT TLS config: %v", err)
+		}
+		if tlsCfg != nil {
+			options.SetTLSConfig(tlsCfg)
+		}
 
 		mqttClient = mqtt.NewClient(options)
 		connectToken := mqttClient.Connect()
@@ -83,7 +92,7 @@ func main() {
 		if err := connectToken.Error(); err != nil {
 			log.Fatalf("failed to connect to MQTT broker: %v", err)
 		}
-		eventService.SetDeviceCommander(client.NewMQTTInstructionPublisher(mqttClient, handler.TopicDoorbellAIResponse))
+		eventService.SetDeviceCommander(client.NewMQTTInstructionPublisher(mqttClient))
 		defer mqttClient.Disconnect(250)
 	}
 

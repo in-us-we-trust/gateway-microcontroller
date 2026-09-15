@@ -12,11 +12,10 @@ import (
 
 type MQTTInstructionPublisher struct {
 	client mqtt.Client
-	topic  string
 }
 
-func NewMQTTInstructionPublisher(client mqtt.Client, topic string) *MQTTInstructionPublisher {
-	return &MQTTInstructionPublisher{client: client, topic: topic}
+func NewMQTTInstructionPublisher(client mqtt.Client) *MQTTInstructionPublisher {
+	return &MQTTInstructionPublisher{client: client}
 }
 
 func (p *MQTTInstructionPublisher) SendInstruction(instruction domain.DeviceInstruction) error {
@@ -24,17 +23,21 @@ func (p *MQTTInstructionPublisher) SendInstruction(instruction domain.DeviceInst
 		return fmt.Errorf("MQTT publisher is not configured")
 	}
 
+	topic := domain.HomeEventTopicPath(instruction.DeviceID, instruction.TrackID, domain.MQTTActionAIResponse)
+	if instruction.MessageID == "" {
+		instruction.MessageID = domain.NewMQTTMessageID()
+	}
 	payload, err := json.Marshal(instruction)
 	if err != nil {
 		return fmt.Errorf("marshal device instruction: %w", err)
 	}
 
-	token := p.client.Publish(p.topic, 1, false, payload)
+	token := p.client.Publish(topic, 1, false, payload)
 	if !token.WaitTimeout(5 * time.Second) {
-		return fmt.Errorf("publish device instruction to %s: timeout", p.topic)
+		return fmt.Errorf("publish device instruction to %s: timeout", topic)
 	}
 	if err := token.Error(); err != nil {
-		return fmt.Errorf("publish device instruction to %s: %w", p.topic, err)
+		return fmt.Errorf("publish device instruction to %s: %w", topic, err)
 	}
 	return nil
 }

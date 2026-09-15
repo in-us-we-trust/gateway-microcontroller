@@ -6,3 +6,5 @@ vendor/
 .env
 media/source.mp4
 debug-chunks/
+certs/*
+!certs/.gitkeep

@@ -19,7 +19,9 @@ type MediaExtractor interface {
 }
 
 type FFmpegMediaExtractor struct {
-	executable string
+	executable   string
+	rtspCAFile   string
+	rtspInsecure bool
 }
 
 func NewFFmpegMediaExtractor(executable string) *FFmpegMediaExtractor {
@@ -29,8 +31,17 @@ func NewFFmpegMediaExtractor(executable string) *FFmpegMediaExtractor {
 	return &FFmpegMediaExtractor{executable: executable}
 }
 
+func (e *FFmpegMediaExtractor) WithRTSPTLS(caFile string, insecure bool) *FFmpegMediaExtractor {
+	if e == nil {
+		return e
+	}
+	e.rtspCAFile = strings.TrimSpace(caFile)
+	e.rtspInsecure = insecure
+	return e
+}
+
 func (e *FFmpegMediaExtractor) ExtractImage(ctx context.Context, rtspURL string) ([]byte, error) {
-	args := append(liveRTSPInputArgs(rtspURL),
+	args := append(e.liveRTSPInputArgs(rtspURL),
 		"-map", "0:v:0",
 		"-frames:v", "1",
 		"-q:v", "2",
@@ -51,7 +62,7 @@ func (e *FFmpegMediaExtractor) ExtractAudioChunk(
 		return nil, fmt.Errorf("audio chunk duration must be positive")
 	}
 
-	args := append(liveRTSPInputArgs(rtspURL),
+	args := append(e.liveRTSPInputArgs(rtspURL),
 		"-map", "0:a:0",
 		"-vn",
 		"-t", formatFFmpegDuration(duration),
@@ -80,7 +91,7 @@ func (e *FFmpegMediaExtractor) ExtractVideoChunk(
 		return nil, fmt.Errorf("video chunk duration must be positive")
 	}
 
-	args := append(liveRTSPInputArgs(rtspURL),
+	args := append(e.liveRTSPInputArgs(rtspURL),
 		"-map", "0:v:0",
 		"-an",
 		"-t", formatFFmpegDuration(duration),
@@ -110,7 +121,7 @@ func (e *FFmpegMediaExtractor) run(ctx context.Context, args ...string) ([]byte,
 		if message == "" {
 			message = "no FFmpeg error output"
 		}
-		return nil, fmt.Errorf("run FFmpeg: %w: %s", err, message)
+		return nil, fmt.Errorf("run FFmpeg: %w: %s", err, redactRTSPUserinfo(message))
 	}
 	if stdout.Len() == 0 {
 		return nil, fmt.Errorf("FFmpeg produced an empty media buffer")
@@ -157,8 +168,8 @@ func (e *FFmpegMediaExtractor) ExtractImageFromFile(ctx context.Context, fileNam
 	)
 }
 
-func liveRTSPInputArgs(rtspURL string) []string {
-	return []string{
+func (e *FFmpegMediaExtractor) liveRTSPInputArgs(rtspURL string) []string {
+	args := []string{
 		"-hide_banner",
 		"-loglevel", "error",
 		"-nostdin",
@@ -166,8 +177,20 @@ func liveRTSPInputArgs(rtspURL string) []string {
 		"-timeout", "10000000",
 		"-fflags", "nobuffer",
 		"-flags", "low_delay",
-		"-i", rtspURL,
 	}
+	if isRTSPS(rtspURL) {
+		if e != nil && e.rtspCAFile != "" {
+			args = append(args, "-ca_file", e.rtspCAFile)
+		}
+		if e != nil && e.rtspInsecure {
+			args = append(args, "-tls_verify", "0")
+		}
+	}
+	return append(args, "-i", rtspURL)
+}
+
+func isRTSPS(rtspURL string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(rtspURL)), "rtsps://")
 }
 
 func formatFFmpegDuration(duration time.Duration) string {

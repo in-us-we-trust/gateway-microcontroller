@@ -63,3 +63,26 @@ func TestSessionService_StaleEndDoesNotCloseReplacementSession(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "track-2", active.TrackID)
 }
+
+func TestSessionService_KeepsIndependentDeviceSessions(t *testing.T) {
+	t.Parallel()
+
+	sessions := NewSessionService(time.Minute)
+	t.Cleanup(sessions.Close)
+
+	sessions.StartSession("device-a", "track-a", "rtsp://mtx/a/doorbell/track-a")
+	sessions.StartSession("device-b", "track-b", "rtsp://mtx/b/doorbell/track-b")
+
+	activeA, okA := sessions.GetActiveSession("device-a")
+	activeB, okB := sessions.GetActiveSession("device-b")
+	require.True(t, okA)
+	require.True(t, okB)
+	assert.Equal(t, "track-a", activeA.TrackID)
+	assert.Equal(t, "track-b", activeB.TrackID)
+
+	assert.True(t, sessions.EndSession("device-a", "track-a"))
+	_, okA = sessions.GetActiveSession("device-a")
+	_, okB = sessions.GetActiveSession("device-b")
+	assert.False(t, okA)
+	assert.True(t, okB)
+}
