@@ -58,5 +58,5 @@ jobs:
             --min-instances 0 \
             --max-instances 1 \
             --concurrency 20 \
-            --cpu-throttling \
+            --no-cpu-throttling \
             --set-env-vars "$ENV_VARS"
