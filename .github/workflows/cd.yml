@@ -53,7 +53,7 @@ jobs:
             --region ${{ env.REGION }} \
             --allow-unauthenticated \
             --port 8080 \
-            --memory 256Mi \
+            --memory 512Mi \
             --cpu 1 \
             --min-instances 0 \
             --max-instances 1 \
