@@ -44,12 +44,8 @@ jobs:
             ${{ env.IMAGE }}:${{ github.sha }}
 
       - name: Deploy to Cloud Run
-        env:
-          MQTT_CA_CERT: ${{ secrets.MQTT_CA_CERT }}
-          MQTT_CLIENT_CERT: ${{ secrets.MQTT_CLIENT_CERT }}
-          MQTT_CLIENT_KEY: ${{ secrets.MQTT_CLIENT_KEY }}
         run: |
-          ENV_VARS="DETECTIVE_MANAGER_URL=${{ secrets.DETECTOR_SERVICE_URL }},DETECTOR_SERVICE_URL=${{ secrets.DETECTOR_SERVICE_URL }},MQTT_BROKER_URL=${{ secrets.MQTT_BROKER_URL }},MQTT_ENABLED=true,MQTT_CLIENT_ID=gateway-micro,ENABLE_MTLS=${{ secrets.ENABLE_MTLS }},MQTT_USERNAME=${{ secrets.MQTT_USERNAME }},MQTT_PASSWORD=${{ secrets.MQTT_PASSWORD }},MQTT_TLS_INSECURE=${{ secrets.MQTT_TLS_INSECURE }},RTSP_BASE=${{ secrets.RTSP_BASE }},RTSP_TLS_INSECURE=${{ secrets.RTSP_TLS_INSECURE }},SESSION_TTL=${{ secrets.SESSION_TTL }},AUDIO_CHUNK_DURATION=${{ secrets.AUDIO_CHUNK_DURATION }},VIDEO_CHUNK_DURATION=${{ secrets.VIDEO_CHUNK_DURATION }},AUDIO_FORMAT=${{ secrets.AUDIO_FORMAT }},FFMPEG_PATH=${{ secrets.FFMPEG_PATH }},MEDIA_REQUEST_TIMEOUT=${{ secrets.MEDIA_REQUEST_TIMEOUT }},MEDIA_CHUNK_BATCH_SIZE=${{ secrets.MEDIA_CHUNK_BATCH_SIZE }},DEBUG_MEDIA_ENABLED=${{ secrets.DEBUG_MEDIA_ENABLED }},DEBUG_MEDIA_MAX_FILES=${{ secrets.DEBUG_MEDIA_MAX_FILES }},DEBUG_MEDIA_DIR=${{ secrets.DEBUG_MEDIA_DIR }}"
+          ENV_VARS="DETECTIVE_MANAGER_URL=${{ secrets.DETECTOR_SERVICE_URL }},DETECTOR_SERVICE_URL=${{ secrets.DETECTOR_SERVICE_URL }},MQTT_BROKER_URL=${{ secrets.MQTT_BROKER_URL }},MQTT_ENABLED=true,MQTT_CLIENT_ID=gateway-micro,ENABLE_MTLS=${{ secrets.ENABLE_MTLS }},MQTT_USERNAME=${{ secrets.MQTT_USERNAME }},MQTT_PASSWORD=${{ secrets.MQTT_PASSWORD }},MQTT_CA_CERT=${{ secrets.MQTT_CA_CERT }},MQTT_CLIENT_CERT=${{ secrets.MQTT_CLIENT_CERT }},MQTT_CLIENT_KEY=${{ secrets.MQTT_CLIENT_KEY }},MQTT_TLS_INSECURE=${{ secrets.MQTT_TLS_INSECURE }},RTSP_BASE=${{ secrets.RTSP_BASE }},RTSP_CA_CERT=${{ secrets.RTSP_CA_CERT }},RTSP_TLS_INSECURE=${{ secrets.RTSP_TLS_INSECURE }},SESSION_TTL=${{ secrets.SESSION_TTL }},AUDIO_CHUNK_DURATION=${{ secrets.AUDIO_CHUNK_DURATION }},VIDEO_CHUNK_DURATION=${{ secrets.VIDEO_CHUNK_DURATION }},AUDIO_FORMAT=${{ secrets.AUDIO_FORMAT }},FFMPEG_PATH=${{ secrets.FFMPEG_PATH }},MEDIA_REQUEST_TIMEOUT=${{ secrets.MEDIA_REQUEST_TIMEOUT }},MEDIA_CHUNK_BATCH_SIZE=${{ secrets.MEDIA_CHUNK_BATCH_SIZE }},DEBUG_MEDIA_ENABLED=${{ secrets.DEBUG_MEDIA_ENABLED }},DEBUG_MEDIA_MAX_FILES=${{ secrets.DEBUG_MEDIA_MAX_FILES }},DEBUG_MEDIA_DIR=${{ secrets.DEBUG_MEDIA_DIR }}"
 
           gcloud run deploy ${{ env.SERVICE }} \
             --image ${{ env.IMAGE }}:${{ github.sha }} \
@@ -63,7 +59,4 @@ jobs:
             --max-instances 1 \
             --concurrency 20 \
             --cpu-throttling \
-            --set-env-vars "$ENV_VARS" \
-            --set-env-vars "MQTT_CA_CERT=${MQTT_CA_CERT}" \
-            --set-env-vars "MQTT_CLIENT_CERT=${MQTT_CLIENT_CERT}" \
-            --set-env-vars "MQTT_CLIENT_KEY=${MQTT_CLIENT_KEY}"
+            --set-env-vars "$ENV_VARS"
