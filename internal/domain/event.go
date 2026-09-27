@@ -33,6 +33,7 @@ type CaptureEvent struct {
 	TrackID   string `json:"-"`
 	DeviceID  string `json:"-"`
 	Timestamp int64  `json:"timestamp,omitempty"`
+	Image     string `json:"image,omitempty"`
 	RTSPURL   string `json:"rtspUrl,omitempty"`
 }
 
@@ -54,6 +55,7 @@ type MediaEventRequest struct {
 	ExtractDuration time.Duration
 	PostDuration    time.Duration
 	Action          string
+	DebugKind       string
 }
 
 type DeviceMediaEvent struct {

@@ -70,7 +70,7 @@ func (h *EventHandler) handleHomeEventMessage(_ mqtt.Client, message mqtt.Messag
 	case domain.MQTTActionStreamEnd:
 		h.handleStreamEndMessage(message, parsed, rawPayload)
 	case domain.MQTTActionCaptureImage:
-		h.handleCaptureMessage(domain.MediaTypeImage, message, parsed, rawPayload)
+		h.handleCaptureMessage(domain.MediaTypeImage, message, parsed, loggedPayload)
 	case domain.MQTTActionCaptureAudio:
 		h.handleCaptureMessage(domain.MediaTypeAudio, message, parsed, rawPayload)
 	case domain.MQTTActionAIResponse:

@@ -178,6 +178,10 @@ func (s *eventService) HandleCapture(ctx context.Context, mediaType domain.Media
 		trackID = strings.TrimSpace(event.EventID)
 	}
 
+	if mediaType == domain.MediaTypeImage {
+		return s.dispatchCaptureImage(ctx, deviceID, trackID, event)
+	}
+
 	var rtspURL string
 	if session, ok := s.sessions.GetActiveSession(deviceID); ok {
 		if trackID == "" {
@@ -205,27 +209,6 @@ func (s *eventService) HandleCapture(ctx context.Context, mediaType domain.Media
 	}
 
 	switch mediaType {
-	case domain.MediaTypeImage:
-		extractCtx, cancelExtract := context.WithTimeout(ctx, s.config.MediaRequestTimeout)
-		extractStart := time.Now()
-		image, err := s.extractor.ExtractImage(extractCtx, session.RTSPURL)
-		extractDuration := time.Since(extractStart)
-		cancelExtract()
-		if err != nil {
-			return fmt.Errorf("extract image: %w", err)
-		}
-		requestCtx, cancelRequest := context.WithTimeout(ctx, s.config.MediaRequestTimeout)
-		defer cancelRequest()
-		return s.dispatchPreparedMedia(requestCtx, domain.MediaEventRequest{
-			TrackID:         session.TrackID,
-			DeviceID:        session.DeviceID,
-			MediaType:       domain.MediaTypeImage,
-			FileName:        "snapshot.jpeg",
-			Buffer:          image,
-			StartedAt:       session.StartedAt,
-			ChunkNumber:     1,
-			ExtractDuration: extractDuration,
-		})
 	case domain.MediaTypeAudio:
 		extractTimeout := s.config.AudioChunkDuration + s.config.MediaRequestTimeout
 		extractCtx, cancelExtract := context.WithTimeout(ctx, extractTimeout)
@@ -325,6 +308,37 @@ func (s *eventService) Close() {
 	s.workers.Wait()
 }
 
+func (s *eventService) dispatchCaptureImage(ctx context.Context, deviceID, trackID string, event domain.CaptureEvent) error {
+	image, err := decodePressImage(event.Image)
+	if err != nil {
+		return fmt.Errorf("capture image: %w", err)
+	}
+
+	session, ok := s.sessions.GetActiveSession(deviceID)
+	if !ok {
+		return fmt.Errorf("capture image requires an active session for device %s", deviceID)
+	}
+	if trackID != "" && trackID != session.TrackID {
+		return fmt.Errorf("capture image track %s does not match active session %s", trackID, session.TrackID)
+	}
+	if !s.sessionIsCurrent(session) {
+		return context.Canceled
+	}
+
+	requestCtx, cancelRequest := context.WithTimeout(ctx, s.config.MediaRequestTimeout)
+	defer cancelRequest()
+
+	return s.dispatchPreparedMedia(requestCtx, domain.MediaEventRequest{
+		TrackID:     session.TrackID,
+		DeviceID:    session.DeviceID,
+		MediaType:   domain.MediaTypeImage,
+		FileName:    "snapshot.jpeg",
+		Buffer:      image,
+		StartedAt:   session.StartedAt,
+		DebugKind:   "capture",
+	})
+}
+
 func (s *eventService) dispatchPressSnapshot(ctx context.Context, session domain.SessionState, event domain.DoorbellPressEvent) error {
 	extractStart := time.Now()
 	image, err := decodePressImage(event.Image)
@@ -382,6 +396,14 @@ func (s *eventService) dispatchRTSPChunks(ctx context.Context, session domain.Se
 	wg.Wait()
 }
 
+type queuedMediaChunk struct {
+	number          int
+	ext             string
+	mediaType       domain.MediaType
+	buffer          []byte
+	extractDuration time.Duration
+}
+
 func (s *eventService) dispatchMediaLoop(
 	ctx context.Context,
 	session domain.SessionState,
@@ -389,69 +411,163 @@ func (s *eventService) dispatchMediaLoop(
 	chunkDuration time.Duration,
 	extract func(context.Context) ([]byte, string, domain.MediaType, error),
 ) {
+	chunks := make(chan queuedMediaChunk, postQueueDepth(chunkDuration, s.config.MediaRequestTimeout))
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		defer close(chunks)
+		s.readMediaChunks(ctx, session, label, chunkDuration, chunks, extract)
+	}()
+	go func() {
+		defer wg.Done()
+		s.postMediaChunks(ctx, session, label, chunks)
+	}()
+	wg.Wait()
+}
+
+func (s *eventService) readMediaChunks(
+	ctx context.Context,
+	session domain.SessionState,
+	label string,
+	chunkDuration time.Duration,
+	chunks chan queuedMediaChunk,
+	extract func(context.Context) ([]byte, string, domain.MediaType, error),
+) {
 	chunkNumber := 1
 	for {
 		if ctx.Err() != nil || !s.sessionIsCurrent(session) {
 			return
 		}
-		if !s.extractAndDispatchChunk(ctx, session, label, chunkDuration, chunkNumber, extract) {
+
+		log.Printf("reading %s chunk %d for device %s track %s", label, chunkNumber, session.DeviceID, session.TrackID)
+		var (
+			data            []byte
+			ext             string
+			mediaType       domain.MediaType
+			extractDuration time.Duration
+		)
+		for {
+			if ctx.Err() != nil || !s.sessionIsCurrent(session) {
+				return
+			}
+			extractTimeout := chunkDuration + s.config.MediaRequestTimeout
+			extractCtx, cancelExtract := context.WithTimeout(ctx, extractTimeout)
+			extractStart := time.Now()
+			var err error
+			data, ext, mediaType, err = extract(extractCtx)
+			extractDuration = time.Since(extractStart)
+			cancelExtract()
+			if err == nil {
+				break
+			}
+			log.Printf("read %s chunk %d for device %s track %s failed after %s: %s", label, chunkNumber, session.DeviceID, session.TrackID, extractDuration.Round(time.Millisecond), redactRTSPUserinfo(err.Error()))
+			if ctx.Err() != nil || !s.sessionIsCurrent(session) || !waitForRetry(ctx, time.Second) {
+				return
+			}
+		}
+		log.Printf("read %s chunk %d for device %s track %s bytes=%d extractMs=%d", label, chunkNumber, session.DeviceID, session.TrackID, len(data), extractDuration.Milliseconds())
+		if !s.sessionIsCurrent(session) {
+			return
+		}
+
+		queued := queuedMediaChunk{
+			number:          chunkNumber,
+			ext:             ext,
+			mediaType:       mediaType,
+			buffer:          data,
+			extractDuration: extractDuration,
+		}
+		if !s.enqueueMediaChunk(ctx, chunks, label, session.DeviceID, queued) {
 			return
 		}
 		chunkNumber++
 	}
 }
 
-func (s *eventService) extractAndDispatchChunk(
+func (s *eventService) postMediaChunks(
 	ctx context.Context,
 	session domain.SessionState,
 	label string,
-	chunkDuration time.Duration,
-	chunkNumber int,
-	extract func(context.Context) ([]byte, string, domain.MediaType, error),
-) bool {
+	chunks <-chan queuedMediaChunk,
+) {
 	for {
 		if ctx.Err() != nil || !s.sessionIsCurrent(session) {
-			return false
+			return
 		}
 
-		extractTimeout := chunkDuration + s.config.MediaRequestTimeout
-		extractCtx, cancelExtract := context.WithTimeout(ctx, extractTimeout)
-		extractStart := time.Now()
-		data, ext, mediaType, err := extract(extractCtx)
-		extractDuration := time.Since(extractStart)
-		cancelExtract()
-		if err != nil {
-			if ctx.Err() != nil {
-				return false
+		var chunk queuedMediaChunk
+		select {
+		case <-ctx.Done():
+			return
+		case next, ok := <-chunks:
+			if !ok {
+				return
 			}
-			log.Printf("failed to extract %s chunk %d for device %s: %s", label, chunkNumber, session.DeviceID, redactRTSPUserinfo(err.Error()))
-			if !waitForRetry(ctx, time.Second) {
-				return false
-			}
-			continue
+			chunk = next
 		}
 
-		if !s.sessionIsCurrent(session) {
-			return false
+		if ctx.Err() != nil || !s.sessionIsCurrent(session) {
+			return
 		}
 
 		requestCtx, cancelRequest := context.WithTimeout(ctx, s.config.MediaRequestTimeout)
-		err = s.dispatchPreparedMedia(requestCtx, domain.MediaEventRequest{
+		err := s.dispatchPreparedMedia(requestCtx, domain.MediaEventRequest{
 			TrackID:         session.TrackID,
 			DeviceID:        session.DeviceID,
-			MediaType:       mediaType,
-			FileName:        fmt.Sprintf("chunk_%03d.%s", chunkNumber, ext),
-			Buffer:          data,
+			MediaType:       chunk.mediaType,
+			FileName:        fmt.Sprintf("chunk_%03d.%s", chunk.number, chunk.ext),
+			Buffer:          chunk.buffer,
 			StartedAt:       session.StartedAt,
-			ChunkNumber:     chunkNumber,
-			ExtractDuration: extractDuration,
+			ChunkNumber:     chunk.number,
+			ExtractDuration: chunk.extractDuration,
 		})
 		cancelRequest()
 		if err != nil && ctx.Err() == nil {
-			log.Printf("failed to dispatch %s chunk %d for device %s: %v", label, chunkNumber, session.DeviceID, err)
+			log.Printf("failed to dispatch %s chunk %d for device %s: %v", label, chunk.number, session.DeviceID, err)
 		}
-		return ctx.Err() == nil && s.sessionIsCurrent(session)
 	}
+}
+
+func (s *eventService) enqueueMediaChunk(
+	ctx context.Context,
+	chunks chan queuedMediaChunk,
+	label string,
+	deviceID string,
+	chunk queuedMediaChunk,
+) bool {
+	for {
+		if ctx.Err() != nil {
+			return false
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case chunks <- chunk:
+			return true
+		default:
+		}
+
+		select {
+		case <-ctx.Done():
+			return false
+		case dropped := <-chunks:
+			log.Printf("dropped %s chunk %d for device %s because the post queue is full", label, dropped.number, deviceID)
+		default:
+		}
+	}
+}
+
+func postQueueDepth(chunkDuration, postTimeout time.Duration) int {
+	if chunkDuration <= 0 || postTimeout <= 0 {
+		return 1
+	}
+	depth := int((postTimeout + chunkDuration - 1) / chunkDuration)
+	if depth < 1 {
+		return 1
+	}
+	return depth
 }
 
 func (s *eventService) sessionIsCurrent(session domain.SessionState) bool {

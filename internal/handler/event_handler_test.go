@@ -195,12 +195,13 @@ func TestEventHandler_CaptureImageUsesTopicIdentity(t *testing.T) {
 	handler := NewEventHandler(svc)
 	handler.handleHomeEventMessage(nil, stubMQTTMessage{
 		topic:   "home/device-a/events/track-1/capture_image",
-		payload: []byte(`{}`),
+		payload: []byte(`{"timestamp":1730000010000,"image":"abc"}`),
 	})
 
 	require.Len(t, svc.captures, 1)
 	assert.Equal(t, "device-a", svc.captures[0].DeviceID)
 	assert.Equal(t, "track-1", svc.captures[0].TrackID)
+	assert.Equal(t, "abc", svc.captures[0].Image)
 }
 
 func TestEventHandler_CaptureAudioUsesTopicIdentity(t *testing.T) {

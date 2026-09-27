@@ -332,6 +332,75 @@ func TestEventService_KeepsExtractingVideoWhileAudioPostIsSlow(t *testing.T) {
 	eventService.Close()
 }
 
+func TestEventService_KeepsExtractingVideoWhileVideoPostIsSlow(t *testing.T) {
+	t.Parallel()
+
+	extractor := &stubMediaExtractor{}
+	detector := &delayedAudioDetectorClient{
+		recordingDetectorClient: recordingDetectorClient{mediaEvents: make(chan domain.MediaEventRequest, 64)},
+		audioDelay:              300 * time.Millisecond,
+	}
+	sessions := NewSessionService(time.Minute)
+	eventService := NewGatewayEventService(
+		&videoDelayDetector{delayedAudioDetectorClient: detector},
+		sessions,
+		extractor,
+		EventServiceConfig{
+			AudioChunkDuration:  10 * time.Millisecond,
+			VideoChunkDuration:  10 * time.Millisecond,
+			AudioFormat:         "wav",
+			MediaRequestTimeout: time.Second,
+		},
+	)
+
+	err := eventService.HandleDoorbellPress(context.Background(), domain.DoorbellPressEvent{
+		EventID:  "track-video-queue",
+		DeviceID: "device-video-queue",
+		Event:    "press",
+		Image:    base64.StdEncoding.EncodeToString([]byte("press-jpeg")),
+		RTSPURL:  "rtsp://camera/stream",
+	})
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		extractor.mu.Lock()
+		defer extractor.mu.Unlock()
+		return extractor.videoCalls >= 2
+	}, time.Second, 5*time.Millisecond)
+
+	require.NoError(t, eventService.HandleStreamEnd(context.Background(), domain.StreamEndEvent{
+		DeviceID: "device-video-queue",
+		TrackID:  "track-video-queue",
+	}))
+	eventService.Close()
+}
+
+type videoDelayDetector struct {
+	*delayedAudioDetectorClient
+}
+
+func (c *videoDelayDetector) SendMediaEvent(ctx context.Context, req domain.MediaEventRequest) (*domain.OrchestratorEventData, error) {
+	if req.MediaType == domain.MediaTypeVideo && c.audioDelay > 0 {
+		timer := time.NewTimer(c.audioDelay)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return c.recordingDetectorClient.SendMediaEvent(ctx, req)
+}
+
+func TestPostQueueDepthCoversOneSlowPost(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, 3, postQueueDepth(5*time.Second, 15*time.Second))
+	assert.Equal(t, 2, postQueueDepth(10*time.Second, 15*time.Second))
+	assert.Equal(t, 1, postQueueDepth(30*time.Second, 15*time.Second))
+	assert.Equal(t, 1, postQueueDepth(0, 15*time.Second))
+}
+
 func TestEventService_StopDangerEndsBothWorkers(t *testing.T) {
 	t.Parallel()
 
@@ -643,7 +712,7 @@ func (e *recordingURLExtractor) ExtractImage(ctx context.Context, rtspURL string
 	return e.stubMediaExtractor.ExtractImage(ctx, rtspURL)
 }
 
-func TestEventService_CaptureReusesSessionURLOrSameRule(t *testing.T) {
+func TestEventService_CaptureImageUsesActiveSessionJPEG(t *testing.T) {
 	t.Parallel()
 
 	detector := &recordingDetectorClient{mediaEvents: make(chan domain.MediaEventRequest, 64)}
@@ -661,35 +730,74 @@ func TestEventService_CaptureReusesSessionURLOrSameRule(t *testing.T) {
 	)
 	t.Cleanup(eventService.Close)
 
+	pressJPEG := []byte("press-jpeg")
+	captureJPEG := []byte{0xff, 0xd8, 0xff, 0xd9}
 	require.NoError(t, eventService.HandleDoorbellPress(context.Background(), domain.DoorbellPressEvent{
 		EventID:  "track-cap",
 		DeviceID: "device-cap",
-		Image:    base64.StdEncoding.EncodeToString([]byte("cap")),
+		Image:    base64.StdEncoding.EncodeToString(pressJPEG),
 	}))
+
+	err := eventService.HandleCapture(context.Background(), domain.MediaTypeImage, domain.CaptureEvent{
+		DeviceID: "device-cap",
+		TrackID:  "track-cap",
+	})
+	require.Error(t, err)
+
+	err = eventService.HandleCapture(context.Background(), domain.MediaTypeImage, domain.CaptureEvent{
+		DeviceID: "device-cap",
+		TrackID:  "track-other",
+		Image:    base64.StdEncoding.EncodeToString(captureJPEG),
+	})
+	require.Error(t, err)
+
+	active, ok := sessions.GetActiveSession("device-cap")
+	require.True(t, ok)
+	assert.Equal(t, "track-cap", active.TrackID)
 
 	require.NoError(t, eventService.HandleCapture(context.Background(), domain.MediaTypeImage, domain.CaptureEvent{
 		DeviceID: "device-cap",
-		RTSPURL:  "rtsp://ignored.example:554/old",
+		TrackID:  "track-cap",
+		Image:    base64.StdEncoding.EncodeToString(captureJPEG),
 	}))
 
+	var gotCapture bool
+	deadline := time.After(time.Second)
+	for !gotCapture {
+		select {
+		case mediaEvent := <-detector.mediaEvents:
+			if mediaEvent.MediaType == domain.MediaTypeImage && string(mediaEvent.Buffer) == string(captureJPEG) {
+				assert.Equal(t, "device-cap", mediaEvent.DeviceID)
+				assert.Equal(t, "track-cap", mediaEvent.TrackID)
+				assert.Equal(t, "snapshot.jpeg", mediaEvent.FileName)
+				assert.Equal(t, active.StartedAt, mediaEvent.StartedAt)
+				gotCapture = true
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for capture image")
+		}
+	}
+
 	extractor.mu.Lock()
-	require.NotEmpty(t, extractor.urls)
-	assert.Equal(t, "rtsp://mediamtx:8554/device-cap/doorbell/track-cap", extractor.urls[len(extractor.urls)-1])
+	assert.Empty(t, extractor.urls)
 	extractor.mu.Unlock()
+
+	active, ok = sessions.GetActiveSession("device-cap")
+	require.True(t, ok)
+	assert.Equal(t, "track-cap", active.TrackID)
 
 	require.NoError(t, eventService.HandleStreamEnd(context.Background(), domain.StreamEndEvent{
 		DeviceID: "device-cap",
 		TrackID:  "track-cap",
 	}))
-
-	require.NoError(t, eventService.HandleCapture(context.Background(), domain.MediaTypeImage, domain.CaptureEvent{
+	err = eventService.HandleCapture(context.Background(), domain.MediaTypeImage, domain.CaptureEvent{
 		DeviceID: "device-cap",
-		TrackID:  "track-ondemand",
-	}))
-
-	extractor.mu.Lock()
-	assert.Equal(t, "rtsp://mediamtx:8554/device-cap/doorbell/track-ondemand", extractor.urls[len(extractor.urls)-1])
-	extractor.mu.Unlock()
+		TrackID:  "track-cap",
+		Image:    base64.StdEncoding.EncodeToString(captureJPEG),
+	})
+	require.Error(t, err)
+	_, ok = sessions.GetActiveSession("device-cap")
+	assert.False(t, ok)
 }
 
 func TestBuildDoorbellRTSPURL(t *testing.T) {
@@ -1099,3 +1207,4 @@ func TestEventService_RecoversAfterRTSPExtractBlip(t *testing.T) {
 		DeviceID: "device-blip", TrackID: "track-blip",
 	}))
 }
+

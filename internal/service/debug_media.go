@@ -70,8 +70,8 @@ type fileDebugMediaWriter struct {
 }
 
 func (w *fileDebugMediaWriter) Write(req domain.MediaEventRequest) {
-	w.logger.Write(req)
 	if len(req.Buffer) == 0 {
+		w.logger.Write(req)
 		return
 	}
 
@@ -89,7 +89,9 @@ func (w *fileDebugMediaWriter) Write(req domain.MediaEventRequest) {
 		key := req.TrackID + "|" + kind
 		w.chunks[key]++
 		chunkNumber = w.chunks[key]
+		req.ChunkNumber = chunkNumber
 	}
+	w.logger.Write(req)
 
 	if err := os.MkdirAll(w.dir, 0o755); err != nil {
 		log.Printf("debug media: create dir %s: %v", w.dir, err)
@@ -150,6 +152,9 @@ func (w *fileDebugMediaWriter) enforceMaxFilesLocked() error {
 }
 
 func debugMediaKind(req domain.MediaEventRequest) (string, string) {
+	if kind := strings.TrimSpace(req.DebugKind); kind != "" {
+		return kind, "jpg"
+	}
 	switch req.MediaType {
 	case domain.MediaTypeVideo:
 		return "video", "mp4"
