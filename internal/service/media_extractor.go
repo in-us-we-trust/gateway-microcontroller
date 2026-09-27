@@ -41,7 +41,7 @@ func (e *FFmpegMediaExtractor) WithRTSPTLS(caFile string, insecure bool) *FFmpeg
 }
 
 func (e *FFmpegMediaExtractor) ExtractImage(ctx context.Context, rtspURL string) ([]byte, error) {
-	args := append(e.liveRTSPInputArgs(rtspURL),
+	args := append(e.liveRTSPInputArgsFor(rtspURL, "video"),
 		"-map", "0:v:0",
 		"-frames:v", "1",
 		"-q:v", "2",
@@ -62,7 +62,7 @@ func (e *FFmpegMediaExtractor) ExtractAudioChunk(
 		return nil, fmt.Errorf("audio chunk duration must be positive")
 	}
 
-	args := append(e.liveRTSPInputArgs(rtspURL),
+	args := append(e.liveRTSPInputArgsFor(rtspURL, "audio"),
 		"-map", "0:a:0",
 		"-vn",
 		"-t", formatFFmpegDuration(duration),
@@ -91,11 +91,12 @@ func (e *FFmpegMediaExtractor) ExtractVideoChunk(
 		return nil, fmt.Errorf("video chunk duration must be positive")
 	}
 
-	args := append(e.liveRTSPInputArgs(rtspURL),
+	// Sin setpts: el timbre manda timestamps RTP de tiempo real, asi que -t
+	// corta a los N segundos reales sin importar los fps.
+	args := append(e.liveRTSPInputArgsFor(rtspURL, "video"),
 		"-map", "0:v:0",
 		"-an",
 		"-t", formatFFmpegDuration(duration),
-		"-vf", "setpts=N/(25*TB)",
 		"-fps_mode", "passthrough",
 		"-c:v", "libx264",
 		"-preset", "ultrafast",
@@ -187,6 +188,32 @@ func (e *FFmpegMediaExtractor) liveRTSPInputArgs(rtspURL string) []string {
 		}
 	}
 	return append(args, "-i", rtspURL)
+}
+
+// liveRTSPInputArgsFor es liveRTSPInputArgs pero pidiendo a FFmpeg que haga
+// SETUP solo del track que se va a usar ("video" o "audio"). Si hace SETUP de
+// los dos y uno no manda paquetes (p. ej. audio apagado en el timbre), FFmpeg
+// se traba esperandolo y la ventana sale vacia.
+func (e *FFmpegMediaExtractor) liveRTSPInputArgsFor(rtspURL, mediaType string) []string {
+	args := e.liveRTSPInputArgs(rtspURL)
+	if mediaType == "" {
+		return args
+	}
+	// -allowed_media_types es opcion del demuxer RTSP: va ANTES de "-i".
+	n := len(args)
+	out := make([]string, 0, n+2)
+	for i := 0; i < n-2; i++ { // todo menos "-i", url
+		// Con MJPEG sobre RTP, "-fflags nobuffer" hace que FFmpeg 6.1 descarte
+		// todos los frames de video ("nothing was encoded": MP4 vacio). El audio
+		// no se ve afectado, asi que solo se saca para video.
+		if mediaType == "video" && args[i] == "-fflags" && i+1 < n-2 && args[i+1] == "nobuffer" {
+			i++
+			continue
+		}
+		out = append(out, args[i])
+	}
+	out = append(out, "-allowed_media_types", mediaType)
+	return append(out, args[n-2:]...)
 }
 
 func isRTSPS(rtspURL string) bool {
