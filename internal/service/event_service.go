@@ -127,14 +127,17 @@ func (s *eventService) HandleDoorbellPress(_ context.Context, event domain.Doorb
 	session, sessionCtx := s.sessions.StartSession(event.DeviceID, event.EventID, rtspURL)
 	log.Printf("started session device=%s trackId=%s rtsp=%s", session.DeviceID, session.TrackID, redactRTSPUserinfo(session.RTSPURL))
 
-	if err := s.dispatchPressSnapshot(sessionCtx, session, event); err != nil {
-		if sessionCtx.Err() == nil {
-			log.Printf("failed to dispatch doorbell snapshot for device %s: %v", session.DeviceID, err)
-		}
-		return nil
-	}
-	if sessionCtx.Err() != nil || !s.sessionIsCurrent(session) {
-		return nil
+	// La foto del press es opcional y no condiciona el streaming: si viene se
+	// envia en paralelo; si falta o es invalida no hay snapshot (sin fallback a
+	// RTSP). Un STOP_DANGER sobre la foto cierra la sesion y corta el streaming.
+	if image, ok := pressSnapshotImage(session, event.Image); ok {
+		s.workers.Add(1)
+		go func() {
+			defer s.workers.Done()
+			if err := s.dispatchPressSnapshot(sessionCtx, session, image); err != nil && sessionCtx.Err() == nil {
+				log.Printf("failed to dispatch doorbell snapshot for device %s: %v", session.DeviceID, err)
+			}
+		}()
 	}
 
 	s.workers.Add(1)
@@ -144,6 +147,21 @@ func (s *eventService) HandleDoorbellPress(_ context.Context, event domain.Doorb
 	}()
 
 	return nil
+}
+
+// pressSnapshotImage devuelve la foto del press decodificada. ok=false si el
+// press no trae foto (campo ausente, null o vacio) o si el base64 es invalido.
+func pressSnapshotImage(session domain.SessionState, raw string) ([]byte, bool) {
+	if strings.TrimSpace(raw) == "" {
+		log.Printf("press without image device=%s trackId=%s, skipping snapshot", session.DeviceID, session.TrackID)
+		return nil, false
+	}
+	image, err := decodePressImage(raw)
+	if err != nil {
+		log.Printf("press image invalid device=%s trackId=%s, skipping snapshot: %v", session.DeviceID, session.TrackID, err)
+		return nil, false
+	}
+	return image, true
 }
 
 func (s *eventService) SetDeviceCommander(commander client.DeviceCommander) {
@@ -176,6 +194,16 @@ func (s *eventService) HandleCapture(ctx context.Context, mediaType domain.Media
 	trackID := strings.TrimSpace(event.TrackID)
 	if trackID == "" {
 		trackID = strings.TrimSpace(event.EventID)
+	}
+
+	// Si el capture pertenece a la llamada activa, se ata a su contexto: un
+	// stream_end (o STOP_DANGER, o un press nuevo) corta el ffmpeg y el POST.
+	if trackID != "" {
+		if sessionCtx, ok := s.sessions.SessionContext(deviceID, trackID); ok {
+			var cancel context.CancelFunc
+			ctx, cancel = withSessionContext(ctx, sessionCtx)
+			defer cancel()
+		}
 	}
 
 	if mediaType == domain.MediaTypeImage {
@@ -308,6 +336,17 @@ func (s *eventService) Close() {
 	s.workers.Wait()
 }
 
+// withSessionContext devuelve un contexto que se cancela cuando se cancela
+// cualquiera de los dos.
+func withSessionContext(ctx, sessionCtx context.Context) (context.Context, context.CancelFunc) {
+	merged, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(sessionCtx, cancel)
+	return merged, func() {
+		stop()
+		cancel()
+	}
+}
+
 func (s *eventService) dispatchCaptureImage(ctx context.Context, deviceID, trackID string, event domain.CaptureEvent) error {
 	image, err := decodePressImage(event.Image)
 	if err != nil {
@@ -329,30 +368,18 @@ func (s *eventService) dispatchCaptureImage(ctx context.Context, deviceID, track
 	defer cancelRequest()
 
 	return s.dispatchPreparedMedia(requestCtx, domain.MediaEventRequest{
-		TrackID:     session.TrackID,
-		DeviceID:    session.DeviceID,
-		MediaType:   domain.MediaTypeImage,
-		FileName:    "snapshot.jpeg",
-		Buffer:      image,
-		StartedAt:   session.StartedAt,
-		DebugKind:   "capture",
+		TrackID:   session.TrackID,
+		DeviceID:  session.DeviceID,
+		MediaType: domain.MediaTypeImage,
+		FileName:  "snapshot.jpeg",
+		Buffer:    image,
+		StartedAt: session.StartedAt,
+		DebugKind: "capture",
 	})
 }
 
-func (s *eventService) dispatchPressSnapshot(ctx context.Context, session domain.SessionState, event domain.DoorbellPressEvent) error {
-	extractStart := time.Now()
-	image, err := decodePressImage(event.Image)
-	if err != nil {
-		log.Printf("press snapshot missing or invalid for device %s, falling back to RTSP: %v", session.DeviceID, err)
-		extractCtx, cancelExtract := context.WithTimeout(ctx, s.config.MediaRequestTimeout)
-		image, err = s.extractor.ExtractImage(extractCtx, session.RTSPURL)
-		cancelExtract()
-		if err != nil {
-			return fmt.Errorf("extract image: %w", err)
-		}
-	}
-	extractDuration := time.Since(extractStart)
-	if !s.sessionIsCurrent(session) {
+func (s *eventService) dispatchPressSnapshot(ctx context.Context, session domain.SessionState, image []byte) error {
+	if ctx.Err() != nil || !s.sessionIsCurrent(session) {
 		return context.Canceled
 	}
 
@@ -360,14 +387,13 @@ func (s *eventService) dispatchPressSnapshot(ctx context.Context, session domain
 	defer cancelRequest()
 
 	return s.dispatchPreparedMedia(requestCtx, domain.MediaEventRequest{
-		TrackID:         session.TrackID,
-		DeviceID:        session.DeviceID,
-		MediaType:       domain.MediaTypeImage,
-		FileName:        "snapshot.jpeg",
-		Buffer:          image,
-		StartedAt:       session.StartedAt,
-		ChunkNumber:     1,
-		ExtractDuration: extractDuration,
+		TrackID:     session.TrackID,
+		DeviceID:    session.DeviceID,
+		MediaType:   domain.MediaTypeImage,
+		FileName:    "snapshot.jpeg",
+		Buffer:      image,
+		StartedAt:   session.StartedAt,
+		ChunkNumber: 1,
 	})
 }
 

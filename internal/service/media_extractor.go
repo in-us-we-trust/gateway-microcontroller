@@ -69,6 +69,7 @@ func (e *FFmpegMediaExtractor) ExtractAudioChunk(
 		"-ac", "1",
 		"-ar", "16000",
 	)
+	args = append(args, abortOnEmptyOutputArgs...)
 
 	switch strings.ToLower(format) {
 	case "mp3":
@@ -98,6 +99,9 @@ func (e *FFmpegMediaExtractor) ExtractVideoChunk(
 		"-an",
 		"-t", formatFFmpegDuration(duration),
 		"-fps_mode", "passthrough",
+	)
+	args = append(args, abortOnEmptyOutputArgs...)
+	args = append(args,
 		"-c:v", "libx264",
 		"-preset", "ultrafast",
 		"-tune", "zerolatency",
@@ -108,6 +112,12 @@ func (e *FFmpegMediaExtractor) ExtractVideoChunk(
 	)
 	return e.run(ctx, args...)
 }
+
+// abortOnEmptyOutputArgs hace que FFmpeg falle si el chunk no tiene ni un
+// frame. Pasa cuando el timbre anuncia un track en el RTSP pero no manda
+// paquetes (p. ej. audio apagado): sin esto FFmpeg sale OK con un MP3 que es
+// solo la cabecera ID3 (~45-63 bytes) y el gateway lo mandaba a analizar.
+var abortOnEmptyOutputArgs = []string{"-abort_on", "empty_output_stream"}
 
 func (e *FFmpegMediaExtractor) run(ctx context.Context, args ...string) ([]byte, error) {
 	var stdout bytes.Buffer

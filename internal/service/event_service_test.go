@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -223,7 +224,7 @@ func TestEventService_ReusesTrackIDForImageAndAudio(t *testing.T) {
 	assert.False(t, active)
 }
 
-func TestEventService_DispatchesVideoAndAudioAfterImage(t *testing.T) {
+func TestEventService_DispatchesImageVideoAndAudio(t *testing.T) {
 	t.Parallel()
 
 	detector := &recordingDetectorClient{mediaEvents: make(chan domain.MediaEventRequest, 32)}
@@ -261,8 +262,8 @@ func TestEventService_DispatchesVideoAndAudioAfterImage(t *testing.T) {
 		}
 	}
 
-	require.NotEmpty(t, order)
-	assert.Equal(t, domain.MediaTypeImage, order[0])
+	// El snapshot se envia en paralelo al streaming: no hay orden garantizado.
+	assert.True(t, seen[domain.MediaTypeImage])
 	assert.True(t, seen[domain.MediaTypeVideo])
 	assert.True(t, seen[domain.MediaTypeAudio])
 
@@ -466,10 +467,9 @@ func TestEventService_StopDangerEndsBothWorkers(t *testing.T) {
 	eventService.Close()
 }
 
-func TestEventService_ImageStopDangerDoesNotStartRTSP(t *testing.T) {
+func TestEventService_ImageStopDangerEndsSessionAndStopsStreaming(t *testing.T) {
 	t.Parallel()
 
-	extractor := &stubMediaExtractor{}
 	detector := &stopDangerDetectorClient{
 		mediaEvents: make(chan domain.MediaEventRequest, 8),
 		stopOn:      domain.MediaTypeImage,
@@ -478,7 +478,7 @@ func TestEventService_ImageStopDangerDoesNotStartRTSP(t *testing.T) {
 	eventService := NewGatewayEventService(
 		detector,
 		sessions,
-		extractor,
+		&blockingStreamExtractor{},
 		EventServiceConfig{
 			AudioChunkDuration:  10 * time.Millisecond,
 			VideoChunkDuration:  10 * time.Millisecond,
@@ -502,18 +502,38 @@ func TestEventService_ImageStopDangerDoesNotStartRTSP(t *testing.T) {
 		t.Fatal("timed out waiting for IMAGE")
 	}
 
-	time.Sleep(50 * time.Millisecond)
-	extractor.mu.Lock()
-	videoCalls := extractor.videoCalls
-	audioCalls := extractor.audioCalls
-	extractor.mu.Unlock()
-	assert.Equal(t, 0, videoCalls)
-	assert.Equal(t, 0, audioCalls)
+	require.Eventually(t, func() bool {
+		_, active := sessions.GetActiveSession("device-image-stop")
+		return !active
+	}, time.Second, 5*time.Millisecond)
 
-	_, active := sessions.GetActiveSession("device-image-stop")
-	assert.False(t, active)
+	// Los lectores de video/audio quedan bloqueados en ffmpeg hasta que se
+	// cancela la sesion: si Close retorna, el STOP_DANGER corto el streaming.
+	closed := make(chan struct{})
+	go func() {
+		eventService.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("streaming kept running after IMAGE STOP_DANGER")
+	}
+}
 
-	eventService.Close()
+// blockingStreamExtractor simula un RTSP que todavia no entrega chunks.
+type blockingStreamExtractor struct {
+	stubMediaExtractor
+}
+
+func (e *blockingStreamExtractor) ExtractAudioChunk(ctx context.Context, _ string, _ time.Duration, _ string) ([]byte, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (e *blockingStreamExtractor) ExtractVideoChunk(ctx context.Context, _ string, _ time.Duration) ([]byte, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
 }
 
 func mediaTypes(events []domain.MediaEventRequest) []domain.MediaType {
@@ -892,37 +912,114 @@ func TestEventService_NewPressReplacesPreviousCallForSameDevice(t *testing.T) {
 	assert.Equal(t, "track-new", session.TrackID)
 }
 
-func TestEventService_PressWithoutImageFallsBackToRTSPSnapshot(t *testing.T) {
+func TestEventService_PressWithoutImageSkipsSnapshotAndStartsStreaming(t *testing.T) {
 	t.Parallel()
 
-	detector := &recordingDetectorClient{mediaEvents: make(chan domain.MediaEventRequest, 32)}
-	extractor := &recordingURLExtractor{}
-	sessions := NewSessionService(time.Minute)
-	eventService := NewGatewayEventService(detector, sessions, extractor, EventServiceConfig{
-		AudioFormat: "mp3", RTSPBase: "rtsp://mediamtx:8554", MediaRequestTimeout: 100 * time.Millisecond,
-	})
-	t.Cleanup(eventService.Close)
+	var nullImage domain.DoorbellPressEvent
+	require.NoError(t, json.Unmarshal([]byte(`{"event":"press","image":null}`), &nullImage))
 
-	require.NoError(t, eventService.HandleDoorbellPress(context.Background(), domain.DoorbellPressEvent{
-		EventID: "track-fb", DeviceID: "device-fb",
-	}))
-
-	select {
-	case mediaEvent := <-detector.mediaEvents:
-		if mediaEvent.MediaType == domain.MediaTypeImage {
-			assert.Equal(t, []byte("image"), mediaEvent.Buffer)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for IMAGE fallback")
+	cases := map[string]string{
+		"missing":        "",
+		"null":           nullImage.Image,
+		"blank":          "   ",
+		"invalid base64": "%%%not-base64%%%",
 	}
 
-	extractor.mu.Lock()
-	assert.NotEmpty(t, extractor.urls)
-	extractor.mu.Unlock()
+	for name, image := range cases {
+		image := image
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			detector := &recordingDetectorClient{mediaEvents: make(chan domain.MediaEventRequest, 32)}
+			extractor := &recordingURLExtractor{}
+			sessions := NewSessionService(time.Minute)
+			eventService := NewGatewayEventService(detector, sessions, extractor, EventServiceConfig{
+				AudioChunkDuration:  10 * time.Millisecond,
+				VideoChunkDuration:  10 * time.Millisecond,
+				AudioFormat:         "mp3",
+				RTSPBase:            "rtsp://mediamtx:8554",
+				MediaRequestTimeout: 100 * time.Millisecond,
+			})
+
+			require.NoError(t, eventService.HandleDoorbellPress(context.Background(), domain.DoorbellPressEvent{
+				EventID: "track-noimg", DeviceID: "device-noimg", Image: image,
+			}))
+
+			seen := map[domain.MediaType]bool{}
+			for !seen[domain.MediaTypeAudio] || !seen[domain.MediaTypeVideo] {
+				select {
+				case mediaEvent := <-detector.mediaEvents:
+					seen[mediaEvent.MediaType] = true
+				case <-time.After(time.Second):
+					t.Fatalf("timed out waiting for AUDIO and VIDEO, got %v", seen)
+				}
+			}
+
+			require.NoError(t, eventService.HandleStreamEnd(context.Background(), domain.StreamEndEvent{
+				DeviceID: "device-noimg", TrackID: "track-noimg",
+			}))
+			eventService.Close()
+
+			for drained := false; !drained; {
+				select {
+				case mediaEvent := <-detector.mediaEvents:
+					seen[mediaEvent.MediaType] = true
+				default:
+					drained = true
+				}
+			}
+			assert.False(t, seen[domain.MediaTypeImage], "press without a valid image must not send a snapshot")
+
+			extractor.mu.Lock()
+			assert.Empty(t, extractor.urls, "press without image must not fall back to an RTSP snapshot")
+			extractor.mu.Unlock()
+		})
+	}
+}
+
+func TestEventService_SnapshotFailureDoesNotBlockStreaming(t *testing.T) {
+	t.Parallel()
+
+	detector := &failingImageDetectorClient{
+		recordingDetectorClient: recordingDetectorClient{mediaEvents: make(chan domain.MediaEventRequest, 32)},
+	}
+	sessions := NewSessionService(time.Minute)
+	eventService := NewGatewayEventService(detector, sessions, &stubMediaExtractor{}, EventServiceConfig{
+		AudioChunkDuration:  10 * time.Millisecond,
+		VideoChunkDuration:  10 * time.Millisecond,
+		AudioFormat:         "mp3",
+		MediaRequestTimeout: 100 * time.Millisecond,
+	})
+
+	require.NoError(t, eventService.HandleDoorbellPress(context.Background(), domain.DoorbellPressEvent{
+		EventID: "track-snapfail", DeviceID: "device-snapfail", Image: base64.StdEncoding.EncodeToString([]byte("jpeg")),
+	}))
+
+	seen := map[domain.MediaType]bool{}
+	for !seen[domain.MediaTypeAudio] || !seen[domain.MediaTypeVideo] {
+		select {
+		case mediaEvent := <-detector.mediaEvents:
+			seen[mediaEvent.MediaType] = true
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for AUDIO and VIDEO after snapshot failure, got %v", seen)
+		}
+	}
 
 	require.NoError(t, eventService.HandleStreamEnd(context.Background(), domain.StreamEndEvent{
-		DeviceID: "device-fb", TrackID: "track-fb",
+		DeviceID: "device-snapfail", TrackID: "track-snapfail",
 	}))
+	eventService.Close()
+}
+
+type failingImageDetectorClient struct {
+	recordingDetectorClient
+}
+
+func (c *failingImageDetectorClient) SendMediaEvent(ctx context.Context, req domain.MediaEventRequest) (*domain.OrchestratorEventData, error) {
+	if req.MediaType == domain.MediaTypeImage {
+		return nil, fmt.Errorf("detective-manager unavailable")
+	}
+	return c.recordingDetectorClient.SendMediaEvent(ctx, req)
 }
 
 func TestEventService_PublishesContinueInstructionAfterChunk(t *testing.T) {
@@ -1055,7 +1152,9 @@ func TestEventService_OnDemandAudioCaptureUsesSession(t *testing.T) {
 
 	detector := &recordingDetectorClient{mediaEvents: make(chan domain.MediaEventRequest, 32)}
 	sessions := NewSessionService(time.Minute)
-	eventService := NewGatewayEventService(detector, sessions, &stubMediaExtractor{}, EventServiceConfig{
+	// El streaming de la sesion arranca en paralelo y tambien pide audio, asi
+	// que el extractor tiene que entregar audio en todas las llamadas.
+	eventService := NewGatewayEventService(detector, sessions, &steadyAudioExtractor{}, EventServiceConfig{
 		AudioChunkDuration:  10 * time.Millisecond,
 		AudioFormat:         "mp3",
 		MediaRequestTimeout: 100 * time.Millisecond,
@@ -1086,6 +1185,19 @@ func TestEventService_OnDemandAudioCaptureUsesSession(t *testing.T) {
 	require.NoError(t, eventService.HandleStreamEnd(context.Background(), domain.StreamEndEvent{
 		DeviceID: "device-aud", TrackID: "track-aud",
 	}))
+}
+
+type steadyAudioExtractor struct {
+	stubMediaExtractor
+}
+
+func (e *steadyAudioExtractor) ExtractAudioChunk(ctx context.Context, _ string, _ time.Duration, _ string) ([]byte, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(5 * time.Millisecond):
+		return []byte("audio"), nil
+	}
 }
 
 func TestEventService_LegacyHTTPEventReachesDetector(t *testing.T) {
@@ -1121,8 +1233,26 @@ func TestEventService_RejectsUnsupportedAudioFormat(t *testing.T) {
 	assert.Contains(t, err.Error(), "unsupported audio format")
 }
 
+// syncBuffer evita la carrera entre los workers que loguean y el test que lee.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 func TestEventService_LogsChunkMetadataOnDispatch(t *testing.T) {
-	var buf bytes.Buffer
+	var buf syncBuffer
 	log.SetOutput(&buf)
 	t.Cleanup(func() { log.SetOutput(os.Stderr) })
 
@@ -1208,3 +1338,42 @@ func TestEventService_RecoversAfterRTSPExtractBlip(t *testing.T) {
 	}))
 }
 
+func TestEventService_StreamEndCancelsRunningCapture(t *testing.T) {
+	t.Parallel()
+
+	detector := &recordingDetectorClient{mediaEvents: make(chan domain.MediaEventRequest, 8)}
+	sessions := NewSessionService(time.Minute)
+	eventService := NewGatewayEventService(detector, sessions, &blockingStreamExtractor{}, EventServiceConfig{
+		AudioChunkDuration:  time.Minute,
+		VideoChunkDuration:  time.Minute,
+		AudioFormat:         "mp3",
+		MediaRequestTimeout: time.Minute,
+		RTSPBase:            "rtsp://mediamtx:8554",
+	})
+	t.Cleanup(eventService.Close)
+
+	require.NoError(t, eventService.HandleDoorbellPress(context.Background(), domain.DoorbellPressEvent{
+		EventID: "track-cancel", DeviceID: "device-cancel",
+	}))
+
+	// El ffmpeg del capture queda bloqueado (1 min de chunk + 1 min de timeout).
+	captureErr := make(chan error, 1)
+	go func() {
+		captureErr <- eventService.HandleCapture(context.Background(), domain.MediaTypeAudio, domain.CaptureEvent{
+			DeviceID: "device-cancel", TrackID: "track-cancel",
+		})
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+	require.NoError(t, eventService.HandleStreamEnd(context.Background(), domain.StreamEndEvent{
+		DeviceID: "device-cancel", TrackID: "track-cancel",
+	}))
+
+	select {
+	case err := <-captureErr:
+		require.Error(t, err)
+		assert.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("stream_end did not cancel the running capture")
+	}
+}

@@ -12,6 +12,9 @@ type SessionRegistry interface {
 	StartSession(deviceID, trackID, rtspURL string) (domain.SessionState, context.Context)
 	GetActiveSession(deviceID string) (domain.SessionState, bool)
 	EndSession(deviceID, trackID string) bool
+	// SessionContext devuelve el contexto de la sesion activa de ese track. Se
+	// cancela con stream_end, STOP_DANGER, un press nuevo o el TTL.
+	SessionContext(deviceID, trackID string) (context.Context, bool)
 	Close()
 }
 
@@ -81,6 +84,16 @@ func (s *sessionService) GetActiveSession(deviceID string) (domain.SessionState,
 	}
 
 	return domain.SessionState{}, false
+}
+
+func (s *sessionService) SessionContext(deviceID, trackID string) (context.Context, bool) {
+	s.mu.RLock()
+	entry, ok := s.sessions[deviceID]
+	s.mu.RUnlock()
+	if !ok || entry.state.TrackID != trackID || !s.now().Before(entry.state.ExpiresAt) {
+		return nil, false
+	}
+	return entry.ctx, true
 }
 
 func (s *sessionService) EndSession(deviceID, trackID string) bool {

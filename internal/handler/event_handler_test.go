@@ -197,6 +197,7 @@ func TestEventHandler_CaptureImageUsesTopicIdentity(t *testing.T) {
 		topic:   "home/device-a/events/track-1/capture_image",
 		payload: []byte(`{"timestamp":1730000010000,"image":"abc"}`),
 	})
+	handler.Close()
 
 	require.Len(t, svc.captures, 1)
 	assert.Equal(t, "device-a", svc.captures[0].DeviceID)
@@ -213,6 +214,7 @@ func TestEventHandler_CaptureAudioUsesTopicIdentity(t *testing.T) {
 		topic:   "home/device-a/events/track-1/capture_audio",
 		payload: []byte(`{"timestamp":1730000010000}`),
 	})
+	handler.Close()
 
 	require.Len(t, svc.captures, 1)
 	assert.Equal(t, "device-a", svc.captures[0].DeviceID)
@@ -247,13 +249,97 @@ func TestEventHandler_DiscardsMalformedTopic(t *testing.T) {
 	assert.Equal(t, 0, svc.pressCount())
 }
 
-func TestEventHandler_SubscribesToHomeEventsWildcard(t *testing.T) {
+func TestEventHandler_SubscribesOnlyToDeviceActions(t *testing.T) {
 	t.Parallel()
 
 	client := &stubMQTTClient{token: stubMQTTToken{ok: true}}
 	err := NewEventHandler(&recordingEventService{}).RegisterMQTTSubscriptions(client)
 	require.NoError(t, err)
-	assert.Equal(t, []string{domain.MQTTHomeEventsWildcard}, client.subscribed)
+	assert.ElementsMatch(t, []string{
+		"home/+/events/+/press",
+		"home/+/events/+/stream_end",
+		"home/+/events/+/capture_image",
+		"home/+/events/+/capture_audio",
+	}, client.subscribed)
+	assert.NotContains(t, client.subscribed, domain.MQTTHomeEventsWildcard, "must not receive its own ia_response")
+}
+
+// slowCaptureService simula un capture que tarda (ffmpeg + POST) y respeta la
+// cancelacion de su contexto.
+type slowCaptureService struct {
+	recordingEventService
+	started chan struct{}
+	once    sync.Once
+	release chan struct{}
+}
+
+func (s *slowCaptureService) HandleCapture(ctx context.Context, mediaType domain.MediaType, event domain.CaptureEvent) error {
+	s.once.Do(func() { close(s.started) })
+	select {
+	case <-s.release:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return s.recordingEventService.HandleCapture(ctx, mediaType, event)
+}
+
+func TestEventHandler_SlowCaptureDoesNotBlockMQTTCallback(t *testing.T) {
+	t.Parallel()
+
+	svc := &slowCaptureService{started: make(chan struct{}), release: make(chan struct{})}
+	handler := NewEventHandler(svc)
+
+	start := time.Now()
+	handler.handleHomeEventMessage(nil, stubMQTTMessage{
+		topic:   "home/device-a/events/track-1/capture_audio",
+		payload: []byte(`{}`),
+	})
+	select {
+	case <-svc.started:
+	case <-time.After(time.Second):
+		t.Fatal("capture never started")
+	}
+
+	// Con el capture todavia corriendo, otros mensajes se atienden igual.
+	handler.handleHomeEventMessage(nil, stubMQTTMessage{
+		topic:   "home/device-b/events/track-9/press",
+		payload: []byte(`{"event":"press"}`),
+	})
+	handler.handleHomeEventMessage(nil, stubMQTTMessage{
+		topic:   "home/device-a/events/track-1/stream_end",
+		payload: []byte(`{}`),
+	})
+	assert.Less(t, time.Since(start), 500*time.Millisecond, "MQTT callback blocked behind a slow capture")
+
+	require.Eventually(t, func() bool { return svc.pressCount() == 1 }, time.Second, 5*time.Millisecond)
+	svc.mu.Lock()
+	assert.Len(t, svc.ends, 1)
+	svc.mu.Unlock()
+
+	close(svc.release)
+	handler.Close()
+}
+
+func TestEventHandler_StreamEndDropsQueuedCapturesOfThatTrack(t *testing.T) {
+	t.Parallel()
+
+	svc := &slowCaptureService{started: make(chan struct{}), release: make(chan struct{})}
+	handler := NewEventHandler(svc)
+
+	// El primer capture queda corriendo; los otros dos esperan en la bandeja.
+	handler.handleHomeEventMessage(nil, stubMQTTMessage{topic: "home/device-a/events/track-1/capture_audio", payload: []byte(`{}`)})
+	<-svc.started
+	handler.handleHomeEventMessage(nil, stubMQTTMessage{topic: "home/device-a/events/track-1/capture_audio", payload: []byte(`{}`)})
+	handler.handleHomeEventMessage(nil, stubMQTTMessage{topic: "home/device-a/events/track-1/capture_image", payload: []byte(`{"image":"abc"}`)})
+	handler.handleHomeEventMessage(nil, stubMQTTMessage{topic: "home/device-a/events/track-1/stream_end", payload: []byte(`{}`)})
+
+	close(svc.release)
+	handler.Close()
+
+	svc.mu.Lock()
+	defer svc.mu.Unlock()
+	assert.Len(t, svc.captures, 1, "only the capture already running completes")
+	assert.Len(t, svc.ends, 1)
 }
 
 func TestEventHandler_PostEventCreatesLegacyHTTPEvent(t *testing.T) {
@@ -368,7 +454,10 @@ func (c *stubMQTTClient) Subscribe(topic string, _ byte, _ mqtt.MessageHandler) 
 	c.subscribed = append(c.subscribed, topic)
 	return c.token
 }
-func (c *stubMQTTClient) SubscribeMultiple(map[string]byte, mqtt.MessageHandler) mqtt.Token {
+func (c *stubMQTTClient) SubscribeMultiple(filters map[string]byte, _ mqtt.MessageHandler) mqtt.Token {
+	for topic := range filters {
+		c.subscribed = append(c.subscribed, topic)
+	}
 	return c.token
 }
 func (c *stubMQTTClient) Unsubscribe(...string) mqtt.Token     { return c.token }

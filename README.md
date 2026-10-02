@@ -7,8 +7,8 @@ When an ESP32 publishes a doorbell press, the gateway:
 1. Reads `deviceId` and `trackId` (`eventId`) from the MQTT topic `home/{deviceId}/events/{trackId}/press`.
 2. Stores an active `deviceId -> trackId` session with a configurable TTL.
 3. Builds the RTSP URL as `{RTSP_BASE}/{deviceId}/doorbell/{trackId}` (the press JSON does not carry `rtspUrl`).
-4. Forwards the press JPEG snapshot from the MQTT `image` field (Base64) as `IMAGE`.
-5. Pulls short video and audio chunks from that RTSP path incrementally (does not buffer the whole stream).
+4. If the press carries a JPEG in the MQTT `image` field (Base64), forwards it as `IMAGE` in the background. A missing, `null`, empty or invalid `image` means no snapshot (there is no RTSP fallback).
+5. Starts pulling short video and audio chunks from that RTSP path right away, without waiting for the snapshot result (does not buffer the whole stream).
 6. Sends each chunk to Detective Manager with the same `trackId`.
 7. If `DEBUG_MEDIA_ENABLED` is true, writes sent files under `DEBUG_MEDIA_DIR` (capped by `DEBUG_MEDIA_MAX_FILES`).
 8. Stops processing when a stream-end message arrives, the session TTL expires, or Detective Manager returns `STOP_DANGER`.
@@ -48,7 +48,7 @@ internal/client/http_detector_client.go  Detective Manager HTTP client
 
 ## MQTT Contracts
 
-The gateway subscribes to `home/+/events/#`. Each call lives under its own `deviceId` and `trackId` (`eventId` of the press). Status and telemetry, if wired later, live at `home/{deviceId}/status` and `home/{deviceId}/telemetry` (not under a `trackId`).
+The gateway subscribes only to the actions the ESP32 publishes: `home/+/events/+/press`, `stream_end`, `capture_image` and `capture_audio` (not `home/+/events/#`, so it does not receive its own `ia_response`). Each call lives under its own `deviceId` and `trackId` (`eventId` of the press). Status and telemetry, if wired later, live at `home/{deviceId}/status` and `home/{deviceId}/telemetry` (not under a `trackId`).
 
 | Topic                                            | Direction        | QoS | Current behavior                                                |
 | ------------------------------------------------ | ---------------- | --: | --------------------------------------------------------------- |
@@ -237,8 +237,8 @@ The gateway builds `rtsp://<RTSP_BASE host>/{deviceId}/doorbell/{trackId}`. Set 
 Expected after `press`:
 
 1. The gateway creates the session.
-2. One `IMAGE` request is sent (MQTT snapshot).
-3. `VIDEO` and `AUDIO` chunks follow in parallel on the configured windows.
+2. One `IMAGE` request is sent only if the press carried `image` (MQTT snapshot).
+3. `VIDEO` and `AUDIO` chunks start in parallel on the configured windows, without waiting for the `IMAGE` response.
 4. Every request contains the same `trackId`.
 
 ```powershell
@@ -340,8 +340,8 @@ Publish RTSP to `{RTSP_BASE}/{deviceId}/doorbell/{trackId}` before `.\dev.ps1 pr
 | `RTSP_BASE`              | `rtsp://localhost:8554`     | MediaMTX base used to build `{RTSP_BASE}/{deviceId}/doorbell/{trackId}`. Include gateway user/password when MediaMTX requires auth, e.g. `rtsps://gateway:gw-lab@host:8322` |
 | `RTSP_CA_CERT`           | empty                       | CA file path passed to FFmpeg (`-ca_file`) for RTSPS                                                                                                                        |
 | `RTSP_TLS_INSECURE`      | `false`                     | FFmpeg `-tls_verify 0` for RTSPS (lab / self-signed)                                                                                                                        |
-| `MEDIA_REQUEST_TIMEOUT`  | `15s`                       | Image extraction and outbound HTTP timeout (also `http.Client` timeout)                                                                                                     |
-| `PRESS_MAX_INFLIGHT`     | `8`                         | Max simultaneous IMAGE POSTs across all devices. Each device still has at most one press in flight plus one pending                                                         |
+| `MEDIA_REQUEST_TIMEOUT`  | `15s`                       | Media extraction and outbound HTTP timeout (also `http.Client` timeout)                                                                                                     |
+| `PRESS_MAX_INFLIGHT`     | `8`                         | Max MQTT tasks (press setup, `capture_image`, `capture_audio`) running at once across all devices. Each device processes its own tasks one at a time, in order |
 
 `DETECTOR_SERVICE_URL` is still accepted as a fallback for backward compatibility, but new deployments should use `DETECTIVE_MANAGER_URL`.
 
@@ -368,8 +368,9 @@ Publish RTSP to `{RTSP_BASE}/{deviceId}/doorbell/{trackId}` before `.\dev.ps1 pr
 
 ### Concurrency and delivery
 
-- MQTT press is queued per `deviceId` (one in flight, latest pending). A global `PRESS_MAX_INFLIGHT` cap limits concurrent IMAGE POSTs. The MQTT callback does not wait for Detective Manager.
-- After a valid press, the IMAGE snapshot is sent first. VIDEO and AUDIO workers start only if that IMAGE is not `STOP_DANGER` and the session is still active. Those workers then run in parallel.
+- The MQTT callback never does I/O. `press`, `capture_image` and `capture_audio` go to a per-`deviceId` queue with one worker per device (in order, one at a time); different devices run in parallel under the global `PRESS_MAX_INFLIGHT` cap. Queue rules: latest pending `press` wins, latest pending `capture_image` of the same track wins, every `capture_audio` is kept (up to 16 queued tasks per device, oldest non-press dropped beyond that).
+- `stream_end` runs in the callback (it only cancels the session) and drops the queued tasks of that track. A capture of the active call is bound to the session context, so `stream_end`, `STOP_DANGER` or the TTL cut its FFmpeg and POST.
+- After a valid press, the optional IMAGE snapshot and the VIDEO and AUDIO workers start in parallel. A `STOP_DANGER` on the IMAGE ends the session and stops the workers.
 - Within each worker, chunks are extracted and dispatched sequentially (extract then POST). A slow AUDIO POST does not block VIDEO extraction.
 - The extractor retries after errors, but failed Detective Manager HTTP requests are logged and the affected media artifact is not retried.
 - There is no durable queue or disk spool. A process crash or network outage can lose media events.

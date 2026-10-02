@@ -18,6 +18,17 @@ const (
 	MQTTActionAIResponse   = "ia_response"
 )
 
+// MQTTHomeEventSubscriptions son los filtros a los que se suscribe el gateway:
+// solo lo que publica el ESP32 (no ia_response, que publica el gateway).
+func MQTTHomeEventSubscriptions() []string {
+	return []string{
+		HomeEventTopicPath("+", "+", MQTTActionPress),
+		HomeEventTopicPath("+", "+", MQTTActionStreamEnd),
+		HomeEventTopicPath("+", "+", MQTTActionCaptureImage),
+		HomeEventTopicPath("+", "+", MQTTActionCaptureAudio),
+	}
+}
+
 type HomeEventTopic struct {
 	DeviceID string
 	TrackID  string

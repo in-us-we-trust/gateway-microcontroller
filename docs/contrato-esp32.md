@@ -17,7 +17,7 @@ ESP32                         Infra                         Gateway
 | Control | MQTT, JSON UTF-8, QoS 1, no retain | Publica y se suscribe      | Timbre, fin, ordenes   |
 | Media   | RTSP/RTP (el gateway usa TCP)      | Publica el live            | Video y audio en vivo  |
 
-El ESP32 no manda chunks de video ni audio por MQTT. El gateway se suscribe a `home/+/events/#` y descarta tópicos que no sean `press`, `stream_end` o `capture_*`.
+El ESP32 no manda chunks de video ni audio por MQTT. El gateway se suscribe solo a `home/+/events/+/press`, `.../stream_end`, `.../capture_image` y `.../capture_audio` (no a `ia_response`, que publica el mismo).
 
 ## 2. Topicos
 
@@ -56,8 +56,11 @@ sequenceDiagram
   ESP->>MQTT: PUB home/{deviceId}/events/{trackId}/press
   MQTT->>GW: press
   Note over GW: trackId = eventId del topico<br/>PLAY {RTSP_BASE}/{deviceId}/doorbell/{trackId}
-  GW->>MQTT: PUB .../ia_response IMAGE
-  GW->>MTX: PLAY TCP
+  par si el press trae image
+    GW->>MQTT: PUB .../ia_response IMAGE
+  and siempre
+    GW->>MTX: PLAY TCP
+  end
   loop mientras la sesion viva
     GW->>MQTT: ia_response VIDEO
     GW->>MQTT: ia_response AUDIO
@@ -79,6 +82,7 @@ Reglas:
 4. Un press con el mismo `deviceId` y el mismo `eventId` que la sesion activa se ignora.
 5. Un `stream_end` o un publisher RTSP con el mismo `deviceId` y **otro** `trackId` no corta ni pisa la llamada activa.
 6. La sesion tambien caduca por `SESSION_TTL` del gateway (default 30s). Ese TTL no se extiende con media.
+7. La foto del press es opcional. Si viene, el gateway la manda como IMAGE en paralelo al streaming; VIDEO/AUDIO no esperan esa respuesta. Un `STOP_DANGER` sobre la IMAGE corta el streaming. El ESP32 no debe asumir que el primer `ia_response` es de tipo IMAGE.
 
 ## 4. MQTT press
 
@@ -88,7 +92,7 @@ Topico: `home/{deviceId}/events/{trackId}/press`. QoS 1. JSON.
 |-------|------|-------------|-------|
 | `timestamp` | number | No | Epoch milisegundos UTC |
 | `event` | string | No | Convencion: `"press"` |
-| `image` | string | No | JPEG en Base64. Si falta, el gateway saca un frame por RTSP |
+| `image` | string | No | JPEG en Base64. Si falta, es `null`, esta vacio o no es Base64 valido, no se envia snapshot (no hay fallback a RTSP) y la llamada arranca igual |
 | `batteryPercentage` | number | No | Informativo |
 
 El JSON **no** lleva `deviceId`, `eventId` ni `rtspUrl`. El gateway toma la identidad del topico y arma `{RTSP_BASE}/{deviceId}/doorbell/{trackId}`.
@@ -184,6 +188,12 @@ Topicos: `home/{deviceId}/events/{trackId}/capture_image` y `.../capture_audio`.
 ```
 
 Si hay sesion activa para ese `deviceId` y `trackId`, se reutiliza su URL RTSP. Si no, el gateway arma la misma regla `{RTSP_BASE}/{deviceId}/doorbell/{trackId}`. No hace falta `rtspUrl` en el JSON.
+
+Los captures se procesan de a uno por dispositivo, en orden, sin frenar al resto de los mensajes MQTT:
+
+- `capture_image`: si llegan varias mientras se analiza otra, solo se procesa la ultima de ese `trackId`.
+- `capture_audio`: se procesan todos, en orden.
+- Un `stream_end` corta el capture en curso de esa llamada y descarta los que estaban esperando.
 
 ## 8. RTSP
 

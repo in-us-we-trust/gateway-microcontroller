@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -119,4 +120,36 @@ func TestFFmpegMediaExtractor_RTSPSTLSFlags(t *testing.T) {
 		"-tls_verify", "0",
 		"-i", "rtsps://gateway:gw-lab@mediamtx:8322/dev/doorbell/track",
 	}, secure.liveRTSPInputArgs("rtsps://gateway:gw-lab@mediamtx:8322/dev/doorbell/track"))
+}
+
+// buildArgsEchoFFmpeg arma un ffmpeg falso que escribe sus argumentos en stdout.
+func buildArgsEchoFFmpeg(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	src := filepath.Join(dir, "main.go")
+	code := "package main\nimport (\"os\"; \"strings\")\nfunc main() {\n\tos.Stdout.WriteString(strings.Join(os.Args[1:], \" \"))\n}\n"
+	require.NoError(t, os.WriteFile(src, []byte(code), 0644))
+	bin := filepath.Join(dir, "ffmpeg")
+	if runtime.GOOS == "windows" {
+		bin += ".exe"
+	}
+	out, err := exec.Command("go", "build", "-o", bin, src).CombinedOutput()
+	require.NoError(t, err, string(out))
+	return bin
+}
+
+func TestFFmpegMediaExtractor_AudioAndVideoAbortOnEmptyOutput(t *testing.T) {
+	t.Parallel()
+
+	extractor := NewFFmpegMediaExtractor(buildArgsEchoFFmpeg(t))
+
+	audioArgs, err := extractor.ExtractAudioChunk(context.Background(), "rtsp://camera/live", time.Second, "mp3")
+	require.NoError(t, err)
+	videoArgs, err := extractor.ExtractVideoChunk(context.Background(), "rtsp://camera/live", time.Second)
+	require.NoError(t, err)
+
+	for name, args := range map[string]string{"audio": string(audioArgs), "video": string(videoArgs)} {
+		assert.Contains(t, args, "-abort_on empty_output_stream", name)
+		assert.Less(t, strings.Index(args, "-abort_on"), strings.Index(args, "pipe:1"), name)
+	}
 }

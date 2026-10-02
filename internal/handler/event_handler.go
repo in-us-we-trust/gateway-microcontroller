@@ -19,17 +19,19 @@ import (
 
 type EventHandler struct {
 	service    service.EventService
-	dispatcher *pressDispatcher
+	dispatcher *deviceDispatcher
 }
 
 func NewEventHandler(svc service.EventService) *EventHandler {
 	return NewEventHandlerWithPressLimit(svc, defaultPressMaxInflight)
 }
 
+// NewEventHandlerWithPressLimit arma el handler con un limite global de tareas
+// MQTT (press y capture) procesandose a la vez entre todos los devices.
 func NewEventHandlerWithPressLimit(svc service.EventService, maxInflight int) *EventHandler {
 	return &EventHandler{
 		service:    svc,
-		dispatcher: newPressDispatcher(svc, maxInflight),
+		dispatcher: newDeviceDispatcher(maxInflight),
 	}
 }
 
@@ -39,15 +41,24 @@ func (h *EventHandler) Close() {
 	}
 }
 
+// RegisterMQTTSubscriptions se suscribe solo a las acciones que publica el
+// ESP32. No usa home/+/events/# para no recibir de vuelta los ia_response que
+// publica el propio gateway.
 func (h *EventHandler) RegisterMQTTSubscriptions(client mqtt.Client) error {
-	token := client.Subscribe(domain.MQTTHomeEventsWildcard, 1, h.handleHomeEventMessage)
+	filters := domain.MQTTHomeEventSubscriptions()
+	topics := make(map[string]byte, len(filters))
+	for _, filter := range filters {
+		topics[filter] = 1
+	}
+
+	token := client.SubscribeMultiple(topics, h.handleHomeEventMessage)
 	if !token.WaitTimeout(10 * time.Second) {
-		return fmt.Errorf("subscribe to MQTT topic %s: timeout", domain.MQTTHomeEventsWildcard)
+		return fmt.Errorf("subscribe to MQTT topics %v: timeout", filters)
 	}
 	if err := token.Error(); err != nil {
-		return fmt.Errorf("subscribe to MQTT topic %s: %w", domain.MQTTHomeEventsWildcard, err)
+		return fmt.Errorf("subscribe to MQTT topics %v: %w", filters, err)
 	}
-	log.Printf("subscribed to MQTT topic %s with QoS 1", domain.MQTTHomeEventsWildcard)
+	log.Printf("subscribed to MQTT topics %v with QoS 1", filters)
 	return nil
 }
 
@@ -100,7 +111,13 @@ func (h *EventHandler) handleDoorbellPressMessage(message mqtt.Message, topic do
 		len(event.Image),
 	)
 
-	h.dispatcher.Submit(event)
+	h.dispatcher.Submit(event.DeviceID, deviceTask{
+		kind:    deviceTaskPress,
+		trackID: event.EventID,
+		run: func(ctx context.Context) error {
+			return h.service.HandleDoorbellPress(ctx, event)
+		},
+	})
 }
 
 func (h *EventHandler) handleStreamEndMessage(message mqtt.Message, topic domain.HomeEventTopic, rawPayload string) {
@@ -125,6 +142,14 @@ func (h *EventHandler) handleStreamEndMessage(message mqtt.Message, topic domain
 	event.DeviceID = topic.DeviceID
 	event.TrackID = topic.TrackID
 
+	// stream_end es rapido (cancela el contexto de la sesion), por eso corre
+	// en el callback: corta en el acto el ffmpeg/POST de un capture en curso
+	// de esa llamada. Lo que todavia estaba en la bandeja de ese track se
+	// descarta.
+	if dropped := h.dispatcher.DropTrack(event.DeviceID, event.TrackID); dropped > 0 {
+		log.Printf("stream_end dropped %d queued tasks device=%s trackId=%s", dropped, event.DeviceID, event.TrackID)
+	}
+
 	if err := h.service.HandleStreamEnd(context.Background(), event); err != nil {
 		log.Printf(
 			"failed to process MQTT message topic=%s error=%v",
@@ -148,9 +173,17 @@ func (h *EventHandler) handleCaptureMessage(mediaType domain.MediaType, message 
 	event.DeviceID = topic.DeviceID
 	event.TrackID = topic.TrackID
 
-	if err := h.service.HandleCapture(context.Background(), mediaType, event); err != nil {
-		log.Printf("MQTT PROCESSING ERROR topic=%s error=%v", message.Topic(), err)
+	kind := deviceTaskCaptureAudio
+	if mediaType == domain.MediaTypeImage {
+		kind = deviceTaskCaptureImage
 	}
+	h.dispatcher.Submit(event.DeviceID, deviceTask{
+		kind:    kind,
+		trackID: event.TrackID,
+		run: func(ctx context.Context) error {
+			return h.service.HandleCapture(ctx, mediaType, event)
+		},
+	})
 }
 
 func (h *EventHandler) handleDeviceMedia(mediaType domain.MediaType) mqtt.MessageHandler {
