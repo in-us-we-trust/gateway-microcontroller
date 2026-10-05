@@ -205,6 +205,45 @@ func TestHTTPDetectorClient_SendMediaEventVideo(t *testing.T) {
 	assert.Equal(t, "VIDEO", resp.ChunkType)
 }
 
+func TestHTTPDetectorClient_SendMediaEventPassesAdditionalInformationThrough(t *testing.T) {
+	t.Parallel()
+
+	const body = `{
+  "data": {
+    "trackId": "e8fa332a-acdf-4bb1-ade3-21e1470f43d4",
+    "chunkType": "IMAGE",
+    "finalVerdict": "SAFE",
+    "finalSeverity": "NORMAL",
+    "message": "Persona reconocida: Lionel Messi",
+    "additionalInformation": {
+      "personName": "Lionel Messi",
+      "score": 0.98,
+      "tags": ["known"]
+    }
+  }
+}`
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, err := w.Write([]byte(body))
+		require.NoError(t, err)
+	}))
+	defer server.Close()
+
+	detector := NewHTTPDetectorClient(server.URL)
+	resp, err := detector.SendMediaEvent(context.Background(), domain.MediaEventRequest{
+		TrackID:   "e8fa332a-acdf-4bb1-ade3-21e1470f43d4",
+		DeviceID:  "device-abc",
+		MediaType: domain.MediaTypeImage,
+		FileName:  "snapshot.jpeg",
+		Buffer:    []byte{0xff, 0xd8, 0xff, 0xd9},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.Equal(t, "SAFE", resp.FinalVerdict)
+	assert.JSONEq(t, `{"personName":"Lionel Messi","score":0.98,"tags":["known"]}`, string(resp.AdditionalInformation))
+}
+
 func TestHTTPDetectorClient_SendMediaEventMapsUpstreamError(t *testing.T) {
 	t.Parallel()
 

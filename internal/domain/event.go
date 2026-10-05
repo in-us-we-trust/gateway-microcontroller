@@ -1,6 +1,9 @@
 package domain
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 type EventType string
 
@@ -73,6 +76,7 @@ type OrchestratorEventData struct {
 	FinalVerdict  string `json:"finalVerdict"`
 	FinalSeverity string `json:"finalSeverity"`
 	Message       string `json:"message"`
+	AdditionalInformation json.RawMessage `json:"additionalInformation,omitempty"`
 }
 
 type OrchestratorEventResponse struct {
@@ -87,6 +91,7 @@ type DeviceInstruction struct {
 	Action    string `json:"action"`
 	Severity  string `json:"severity"`
 	Message   string `json:"message"`
+	AdditionalInformation json.RawMessage `json:"additionalInformation,omitempty"`
 }
 
 type EventRequest struct {

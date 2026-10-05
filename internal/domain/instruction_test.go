@@ -1,6 +1,9 @@
 package domain
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestInstructionFromOrchestrator_UsesFinalVerdictAndMessage(t *testing.T) {
 	instruction := InstructionFromOrchestrator("device-1", OrchestratorEventData{
@@ -67,6 +70,30 @@ func TestInstructionFromOrchestrator_DefaultMessageWhenEmpty(t *testing.T) {
 	})
 	if danger.Message != "Danger detected. Stop the active session." {
 		t.Fatalf("message=%s", danger.Message)
+	}
+}
+
+func TestInstructionFromOrchestrator_PassesAdditionalInformationThrough(t *testing.T) {
+	raw := json.RawMessage(`{"personName":"Lionel Messi","score":0.98}`)
+	instruction := InstructionFromOrchestrator("device-1", OrchestratorEventData{
+		TrackID:               "track-1",
+		ChunkType:             "IMAGE",
+		FinalVerdict:          "SAFE",
+		FinalSeverity:         "NORMAL",
+		Message:               "Persona reconocida: Lionel Messi",
+		AdditionalInformation: raw,
+	})
+
+	if string(instruction.AdditionalInformation) != string(raw) {
+		t.Fatalf("additionalInformation=%s", instruction.AdditionalInformation)
+	}
+
+	without := InstructionFromOrchestrator("device-1", OrchestratorEventData{
+		TrackID:   "track-1",
+		ChunkType: "IMAGE",
+	})
+	if len(without.AdditionalInformation) != 0 {
+		t.Fatalf("additionalInformation=%s", without.AdditionalInformation)
 	}
 }
 
