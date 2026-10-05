@@ -71,11 +71,11 @@ type DeviceMediaEvent struct {
 }
 
 type OrchestratorEventData struct {
-	TrackID       string `json:"trackId"`
-	ChunkType     string `json:"chunkType"`
-	FinalVerdict  string `json:"finalVerdict"`
-	FinalSeverity string `json:"finalSeverity"`
-	Message       string `json:"message"`
+	TrackID               string          `json:"trackId"`
+	ChunkType             string          `json:"chunkType"`
+	FinalVerdict          string          `json:"finalVerdict"`
+	FinalSeverity         string          `json:"finalSeverity"`
+	Message               string          `json:"message"`
 	AdditionalInformation json.RawMessage `json:"additionalInformation,omitempty"`
 }
 
@@ -84,13 +84,13 @@ type OrchestratorEventResponse struct {
 }
 
 type DeviceInstruction struct {
-	MessageID string `json:"messageId"`
-	TrackID   string `json:"-"`
-	DeviceID  string `json:"-"`
-	ChunkType string `json:"chunkType"`
-	Action    string `json:"action"`
-	Severity  string `json:"severity"`
-	Message   string `json:"message"`
+	MessageID             string          `json:"messageId"`
+	TrackID               string          `json:"-"`
+	DeviceID              string          `json:"-"`
+	ChunkType             string          `json:"chunkType"`
+	Action                string          `json:"action"`
+	Severity              string          `json:"severity"`
+	Message               string          `json:"message"`
 	AdditionalInformation json.RawMessage `json:"additionalInformation,omitempty"`
 }
 
