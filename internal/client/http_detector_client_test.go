@@ -244,6 +244,97 @@ func TestHTTPDetectorClient_SendMediaEventPassesAdditionalInformationThrough(t *
 	assert.JSONEq(t, `{"personName":"Lionel Messi","score":0.98,"tags":["known"]}`, string(resp.AdditionalInformation))
 }
 
+func TestHTTPDetectorClient_ReportsTransportAndDecodeErrors(t *testing.T) {
+	t.Parallel()
+
+	ctx := requestctx.WithDeviceID(context.Background(), "device-abc")
+	unreachable := NewHTTPDetectorClientWithTimeout("http://127.0.0.1:1", 0)
+
+	_, err := unreachable.Analyze(ctx, &domain.EventRequest{Type: domain.EventTypeBell, Image: "x"})
+	require.Error(t, err)
+	_, err = unreachable.RegisterDevice(ctx, &domain.DeviceRequest{ID: "device-abc"})
+	require.Error(t, err)
+	_, err = unreachable.SendMediaEvent(ctx, domain.MediaEventRequest{
+		TrackID: "t", DeviceID: "d", MediaType: domain.MediaTypeAudio, FileName: "chunk.wav", Buffer: []byte("wav"),
+	})
+	require.Error(t, err)
+
+	_, err = NewHTTPDetectorClient("http://example").SendMediaEvent(context.Background(), domain.MediaEventRequest{
+		TrackID: "t", DeviceID: "d", MediaType: domain.MediaTypeAudio, FileName: "chunk.ogg", Buffer: []byte("ogg"),
+	})
+	require.Error(t, err)
+
+	detailServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"detail":"bad image"}`))
+	}))
+	defer detailServer.Close()
+
+	_, err = NewHTTPDetectorClient(detailServer.URL).Analyze(ctx, &domain.EventRequest{
+		Type: domain.EventTypeMotion, Image: "x",
+	})
+	require.Error(t, err)
+
+	statusServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer statusServer.Close()
+
+	_, err = NewHTTPDetectorClient(statusServer.URL).Analyze(ctx, &domain.EventRequest{
+		Type: domain.EventTypeMotion, Image: "x",
+	})
+	require.Error(t, err)
+	_, err = NewHTTPDetectorClient(statusServer.URL).RegisterDevice(context.Background(), &domain.DeviceRequest{ID: "device-abc"})
+	require.Error(t, err)
+
+	invalidServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{`))
+	}))
+	defer invalidServer.Close()
+
+	_, err = NewHTTPDetectorClient(invalidServer.URL).Analyze(ctx, &domain.EventRequest{
+		Type: domain.EventTypeMotion, Image: "x",
+	})
+	require.Error(t, err)
+	_, err = NewHTTPDetectorClient(invalidServer.URL).RegisterDevice(context.Background(), &domain.DeviceRequest{ID: "device-abc"})
+	require.Error(t, err)
+}
+
+func TestHTTPDetectorClient_SendMediaEventFillsMissingIdentity(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, err := w.Write([]byte(`{"data":{}}`))
+		require.NoError(t, err)
+	}))
+	defer server.Close()
+
+	resp, err := NewHTTPDetectorClient(server.URL).SendMediaEvent(context.Background(), domain.MediaEventRequest{
+		TrackID: "track-123", DeviceID: "device-abc", MediaType: domain.MediaTypeAudio,
+		FileName: "chunk.wav", Buffer: []byte("wav"),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "track-123", resp.TrackID)
+	assert.Equal(t, "AUDIO", resp.ChunkType)
+}
+
+func TestHTTPDetectorClient_SendMediaEventRejectsInvalidSuccessBody(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{`))
+	}))
+	defer server.Close()
+
+	_, err := NewHTTPDetectorClient(server.URL).SendMediaEvent(context.Background(), domain.MediaEventRequest{
+		TrackID: "t", DeviceID: "d", MediaType: domain.MediaTypeImage, FileName: "snapshot.jpeg", Buffer: []byte("jpeg"),
+	})
+	require.Error(t, err)
+}
+
 func TestHTTPDetectorClient_SendMediaEventMapsUpstreamError(t *testing.T) {
 	t.Parallel()
 

@@ -27,6 +27,15 @@ func TestRespondWritesProblemDetails(t *testing.T) {
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/events", nil)
 
+	Respond(c, BadGateway("upstream failed", "/api/v1/events", "DTE-002"))
+	assert.Equal(t, http.StatusBadGateway, w.Code)
+	assert.Contains(t, w.Body.String(), "DTE-002")
+	assert.Contains(t, w.Body.String(), "Bad Gateway")
+
+	w = httptest.NewRecorder()
+	c, _ = gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/events", nil)
+
 	Respond(c, Unauthorized("missing device", "/api/v1/events"))
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 

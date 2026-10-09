@@ -1038,15 +1038,19 @@ func TestEventService_PublishesContinueInstructionAfterChunk(t *testing.T) {
 		EventID: "track-cmd", DeviceID: "device-cmd", Image: base64.StdEncoding.EncodeToString([]byte("jpeg")),
 	}))
 
+	var instruction domain.DeviceInstruction
 	require.Eventually(t, func() bool {
 		commander.mu.Lock()
 		defer commander.mu.Unlock()
-		return len(commander.instructions) > 0
+		for _, candidate := range commander.instructions {
+			if candidate.ChunkType == "IMAGE" {
+				instruction = candidate
+				return true
+			}
+		}
+		return false
 	}, time.Second, 10*time.Millisecond)
 
-	commander.mu.Lock()
-	instruction := commander.instructions[0]
-	commander.mu.Unlock()
 	assert.NotEmpty(t, instruction.MessageID)
 	assert.Equal(t, "device-cmd", instruction.DeviceID)
 	assert.Equal(t, "track-cmd", instruction.TrackID)

@@ -108,6 +108,34 @@ func TestMQTTInstructionPublisher_ForwardsAdditionalInformation(t *testing.T) {
 	assert.JSONEq(t, `{"personName":"Lionel Messi"}`, string(got.AdditionalInformation))
 }
 
+func TestMQTTInstructionPublisher_ReportsPublishFailures(t *testing.T) {
+	t.Parallel()
+
+	timeoutBroker := &stubPublishClient{token: stubToken{ok: false}}
+	err := NewMQTTInstructionPublisher(timeoutBroker).SendInstruction(domain.DeviceInstruction{
+		DeviceID: "device-a", TrackID: "track-1",
+	})
+	require.Error(t, err)
+
+	failedBroker := &stubPublishClient{token: stubToken{ok: true, err: assert.AnError}}
+	err = NewMQTTInstructionPublisher(failedBroker).SendInstruction(domain.DeviceInstruction{
+		DeviceID: "device-a", TrackID: "track-1",
+	})
+	require.Error(t, err)
+
+	err = NewMQTTInstructionPublisher(nil).SendInstruction(domain.DeviceInstruction{
+		DeviceID: "device-a", TrackID: "track-1",
+	})
+	require.Error(t, err)
+
+	err = NewMQTTInstructionPublisher(&stubPublishClient{token: stubToken{ok: true}}).SendInstruction(domain.DeviceInstruction{
+		DeviceID:              "device-a",
+		TrackID:               "track-1",
+		AdditionalInformation: json.RawMessage(`{`),
+	})
+	require.Error(t, err)
+}
+
 func TestMQTTInstructionPublisher_RequiresConfiguredClient(t *testing.T) {
 	t.Parallel()
 
