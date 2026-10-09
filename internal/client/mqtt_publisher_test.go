@@ -83,6 +83,59 @@ func TestMQTTInstructionPublisher_PublishesOnCallTopic(t *testing.T) {
 	assert.False(t, hasTrackID)
 }
 
+func TestMQTTInstructionPublisher_ForwardsAdditionalInformation(t *testing.T) {
+	t.Parallel()
+
+	broker := &stubPublishClient{token: stubToken{ok: true}}
+	publisher := NewMQTTInstructionPublisher(broker)
+
+	err := publisher.SendInstruction(domain.DeviceInstruction{
+		MessageID:             "msg-1",
+		TrackID:               "track-1",
+		DeviceID:              "device-a",
+		ChunkType:             "IMAGE",
+		Action:                "SAFE",
+		Severity:              "NORMAL",
+		Message:               "Persona reconocida: Lionel Messi",
+		AdditionalInformation: json.RawMessage(`{"personName":"Lionel Messi"}`),
+	})
+	require.NoError(t, err)
+
+	var got struct {
+		AdditionalInformation json.RawMessage `json:"additionalInformation"`
+	}
+	require.NoError(t, json.Unmarshal(broker.payload, &got))
+	assert.JSONEq(t, `{"personName":"Lionel Messi"}`, string(got.AdditionalInformation))
+}
+
+func TestMQTTInstructionPublisher_ReportsPublishFailures(t *testing.T) {
+	t.Parallel()
+
+	timeoutBroker := &stubPublishClient{token: stubToken{ok: false}}
+	err := NewMQTTInstructionPublisher(timeoutBroker).SendInstruction(domain.DeviceInstruction{
+		DeviceID: "device-a", TrackID: "track-1",
+	})
+	require.Error(t, err)
+
+	failedBroker := &stubPublishClient{token: stubToken{ok: true, err: assert.AnError}}
+	err = NewMQTTInstructionPublisher(failedBroker).SendInstruction(domain.DeviceInstruction{
+		DeviceID: "device-a", TrackID: "track-1",
+	})
+	require.Error(t, err)
+
+	err = NewMQTTInstructionPublisher(nil).SendInstruction(domain.DeviceInstruction{
+		DeviceID: "device-a", TrackID: "track-1",
+	})
+	require.Error(t, err)
+
+	err = NewMQTTInstructionPublisher(&stubPublishClient{token: stubToken{ok: true}}).SendInstruction(domain.DeviceInstruction{
+		DeviceID:              "device-a",
+		TrackID:               "track-1",
+		AdditionalInformation: json.RawMessage(`{`),
+	})
+	require.Error(t, err)
+}
+
 func TestMQTTInstructionPublisher_RequiresConfiguredClient(t *testing.T) {
 	t.Parallel()
 

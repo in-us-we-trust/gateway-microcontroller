@@ -19,12 +19,13 @@ func InstructionFromOrchestrator(deviceID string, data OrchestratorEventData) De
 	}
 
 	return DeviceInstruction{
-		TrackID:   data.TrackID,
-		DeviceID:  deviceID,
-		ChunkType: data.ChunkType,
-		Action:    action,
-		Severity:  severity,
-		Message:   message,
+		TrackID:               data.TrackID,
+		DeviceID:              deviceID,
+		ChunkType:             data.ChunkType,
+		Action:                action,
+		Severity:              severity,
+		Message:               message,
+		AdditionalInformation: data.AdditionalInformation,
 	}
 }
 
